@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+
+<html class="light" lang="ko"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>변경 및 고시 목록 - 입법 서비스</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700&amp;family=Inter:wght@400;600&amp;family=JetBrains+Mono:wght@400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "inverse-primary": "#aac7ff",
+                        "background": "#f9f9ff",
+                        "inverse-on-surface": "#f0f0f7",
+                        "outline": "#737782",
+                        "primary": "#003874",
+                        "secondary-fixed-dim": "#7ed9a3",
+                        "primary-container": "#1a4f95",
+                        "on-primary": "#ffffff",
+                        "on-primary-container": "#a3c3ff",
+                        "tertiary": "#5e2b00",
+                        "on-secondary-container": "#087347",
+                        "on-tertiary-fixed-variant": "#733600",
+                        "background-subtle": "#F8FAFC",
+                        "surface-container-high": "#e8e8ee",
+                        "outline-variant": "#c3c6d2",
+                        "surface-container-lowest": "#ffffff",
+                        "primary-fixed": "#d6e3ff",
+                        "error-container": "#ffdad6",
+                        "surface-tint": "#2e5ea5",
+                        "surface-dim": "#d9d9e0",
+                        "on-surface-variant": "#424751",
+                        "border-neutral": "#E2E8F0",
+                        "surface": "#f9f9ff",
+                        "surface-container-low": "#f3f3fa",
+                        "tertiary-fixed-dim": "#ffb688",
+                        "secondary-fixed": "#9af6be",
+                        "on-primary-fixed": "#001b3e",
+                        "on-tertiary-container": "#ffb17e",
+                        "tertiary-container": "#813d00",
+                        "status-enactment": "#10B981",
+                        "surface-container-highest": "#e2e2e8",
+                        "on-tertiary": "#ffffff",
+                        "on-error": "#ffffff",
+                        "secondary": "#006d42",
+                        "on-secondary-fixed-variant": "#005230",
+                        "surface-variant": "#e2e2e8",
+                        "inverse-surface": "#2e3035",
+                        "surface-container": "#ededf4",
+                        "primary-fixed-dim": "#aac7ff",
+                        "tertiary-fixed": "#ffdbc7",
+                        "on-primary-fixed-variant": "#08458b",
+                        "on-surface": "#1a1c20",
+                        "on-secondary-fixed": "#002110",
+                        "on-secondary": "#ffffff",
+                        "secondary-container": "#9af6be",
+                        "on-error-container": "#93000a",
+                        "surface-bright": "#f9f9ff",
+                        "status-notice": "#007AFF",
+                        "on-background": "#1a1c20",
+                        "error": "#ba1a1a",
+                        "on-tertiary-fixed": "#311300"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "sidebar-width": "280px",
+                        "container-max": "1200px",
+                        "base": "4px",
+                        "lg": "24px",
+                        "xl": "40px",
+                        "md": "16px",
+                        "sm": "8px",
+                        "xs": "4px"
+                    },
+                    "fontFamily": {
+                        "headline-lg": ["Hanken Grotesk"],
+                        "headline-sm": ["Hanken Grotesk"],
+                        "body-sm": ["Inter"],
+                        "body-md": ["Inter"],
+                        "headline-md": ["Hanken Grotesk"],
+                        "code-sm": ["JetBrains Mono"],
+                        "body-lg": ["Inter"],
+                        "label-md": ["Inter"]
+                    },
+                    "fontSize": {
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "headline-sm": ["20px", { "lineHeight": "28px", "fontWeight": "600" }],
+                        "body-sm": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "body-md": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-md": ["24px", { "lineHeight": "32px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                        "code-sm": ["12px", { "lineHeight": "16px", "fontWeight": "400" }],
+                        "body-lg": ["18px", { "lineHeight": "28px", "fontWeight": "400" }],
+                        "label-md": ["13px", { "lineHeight": "16px", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .material-symbols-outlined[data-weight="fill"] {
+            font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+</head>
+<body class="bg-background-subtle text-on-surface font-body-md antialiased flex">
+<!-- SideNavBar -->
+<nav class="hidden md:flex flex-col h-screen w-sidebar-width fixed left-0 top-0 bg-surface-container-low border-r border-neutral p-md space-y-sm z-40">
+<div class="mb-xl px-sm">
+<h1 class="font-headline-sm text-headline-sm font-black text-primary">입법 서비스</h1>
+<p class="font-body-sm text-body-sm text-on-surface-variant mt-1">메일링 대시보드</p>
+</div>
+<button class="w-full bg-primary text-on-primary py-sm px-md rounded-xl font-label-md text-label-md flex items-center justify-center gap-2 hover:bg-primary-container transition-colors mb-lg">
+<span class="material-symbols-outlined text-[18px]">add</span>
+            새 메일 작성
+        </button>
+<div class="flex-1 space-y-xs">
+<a class="flex items-center gap-3 px-md py-sm rounded-xl text-on-surface-variant hover:bg-surface-container-high transition-all font-label-md text-label-md" href="#">
+<span class="material-symbols-outlined" data-icon="send">send</span>
+                메일 발송
+            </a>
+<a class="flex items-center gap-3 px-md py-sm rounded-xl bg-primary-container text-on-primary-container font-bold translate-x-1 duration-200 transition-all font-label-md text-label-md" href="#">
+<span class="material-symbols-outlined" data-icon="list_alt">list_alt</span>
+                변경 및 고시 목록
+            </a>
+</div>
+<div class="mt-auto space-y-xs pt-md border-t border-neutral">
+<a class="flex items-center gap-3 px-md py-sm rounded-xl text-on-surface-variant hover:bg-surface-container-high transition-all font-label-md text-label-md" href="#">
+<span class="material-symbols-outlined" data-icon="help">help</span>
+                도움말
+            </a>
+<a class="flex items-center gap-3 px-md py-sm rounded-xl text-on-surface-variant hover:bg-surface-container-high transition-all font-label-md text-label-md" href="#">
+<span class="material-symbols-outlined" data-icon="logout">logout</span>
+                로그아웃
+            </a>
+</div>
+</nav>
+<!-- Main Content Area -->
+<main class="flex-1 md:ml-sidebar-width min-h-screen flex flex-col">
+<!-- TopNavBar (Mobile only for shell, but used as header here) -->
+<header class="md:hidden flex justify-between items-center px-lg py-sm w-full sticky top-0 z-50 bg-surface border-b border-neutral">
+<div class="font-headline-md text-headline-md font-bold text-primary">LegisMail</div>
+<div class="flex gap-4 text-primary">
+<button class="hover:bg-surface-container-low p-2 rounded-full transition-colors"><span class="material-symbols-outlined" data-icon="notifications">notifications</span></button>
+<button class="hover:bg-surface-container-low p-2 rounded-full transition-colors"><span class="material-symbols-outlined" data-icon="settings">settings</span></button>
+</div>
+</header>
+<div class="p-lg md:p-xl max-w-container-max mx-auto w-full">
+<div class="mb-lg flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+<h2 class="font-headline-lg text-headline-lg text-on-surface">변경 및 고시 목록</h2>
+<!-- Filters -->
+<div class="flex flex-wrap gap-sm">
+<select class="bg-surface border border-neutral rounded-lg px-3 py-2 font-body-sm text-body-sm text-on-surface focus:border-primary focus:ring-1 focus:ring-primary outline-none">
+<option>최근 1주일</option>
+<option>최근 1개월</option>
+<option>최근 3개월</option>
+</select>
+<select class="bg-surface border border-neutral rounded-lg px-3 py-2 font-body-sm text-body-sm text-on-surface focus:border-primary focus:ring-1 focus:ring-primary outline-none">
+<option>전체 유형</option>
+<option>법령</option>
+<option>행정규칙</option>
+</select>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-[18px]">search</span>
+<input class="pl-9 pr-3 py-2 bg-surface border border-neutral rounded-lg font-body-sm text-body-sm text-on-surface focus:border-primary focus:ring-1 focus:ring-primary outline-none w-48" placeholder="키워드 (환경 관련)" type="text"/>
+</div>
+</div>
+</div>
+<!-- Content Sections -->
+<div class="grid grid-cols-1 gap-xl">
+<!-- 변경 법령 Section -->
+<section>
+<h3 class="font-headline-sm text-headline-sm text-on-surface mb-md flex items-center gap-2">
+<span class="material-symbols-outlined text-primary">gavel</span>
+                        변경 법령
+                    </h3>
+<div class="space-y-md">
+<!-- Card 1: 입법예고 -->
+<article class="bg-surface rounded-xl border border-neutral p-md hover:shadow-[0px_4px_12px_rgba(0,0,0,0.05)] transition-shadow">
+<div class="flex flex-col md:flex-row gap-md md:items-start justify-between">
+<div class="flex-1">
+<div class="flex items-center gap-sm mb-2">
+<span class="bg-status-notice/10 text-status-notice px-2 py-0.5 rounded font-label-md text-label-md">입법예고</span>
+<span class="font-body-sm text-body-sm text-outline">환경부</span>
+</div>
+<h4 class="font-headline-sm text-headline-sm text-on-surface mb-1">대기환경보전법 시행규칙 일부개정령안</h4>
+<p class="font-body-sm text-body-sm text-on-surface-variant line-clamp-2 mb-3">
+                                        초미세먼지 발생 저감을 위해 대기배출시설의 배출허용기준을 강화하고, 방지시설 설치 면제 기준을 정비하는 등 현행 제도의 운영상 나타난 일부 미비점을 개선·보완하려는 것임.
+                                    </p>
+<div class="flex items-center gap-md font-body-sm text-body-sm text-outline-variant">
+<span class="flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">calendar_today</span> 예고기간: 2023.10.15 ~ 2023.11.24</span>
+</div>
+</div>
+<div class="shrink-0 flex items-center justify-end">
+<a class="inline-flex items-center gap-1 border border-primary text-primary px-4 py-2 rounded-lg font-label-md text-label-md hover:bg-primary-fixed transition-colors" href="#">
+                                        원문 링크 <span class="material-symbols-outlined text-[16px]">open_in_new</span>
+</a>
+</div>
+</div>
+</article>
+<!-- Card 2: 개정 -->
+<article class="bg-surface rounded-xl border border-neutral p-md hover:shadow-[0px_4px_12px_rgba(0,0,0,0.05)] transition-shadow">
+<div class="flex flex-col md:flex-row gap-md md:items-start justify-between">
+<div class="flex-1">
+<div class="flex items-center gap-sm mb-2">
+<span class="bg-status-enactment/10 text-status-enactment px-2 py-0.5 rounded font-label-md text-label-md">개정</span>
+<span class="font-body-sm text-body-sm text-outline">환경부</span>
+</div>
+<h4 class="font-headline-sm text-headline-sm text-on-surface mb-1">자원순환기본법</h4>
+<p class="font-body-sm text-body-sm text-on-surface-variant line-clamp-2 mb-3">
+                                        순환경제사회로의 전환을 촉진하기 위해 제품의 생산부터 폐기까지 전 과정에서 자원의 순환이용을 극대화하도록 관련 제도를 전면 개편함.
+                                    </p>
+<div class="flex flex-wrap items-center gap-md font-body-sm text-body-sm text-outline-variant">
+<span class="flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">campaign</span> 공포일: 2023.10.10</span>
+<span class="flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">play_circle</span> 시행일: 2024.01.01</span>
+</div>
+</div>
+<div class="shrink-0 flex items-center justify-end">
+<a class="inline-flex items-center gap-1 border border-primary text-primary px-4 py-2 rounded-lg font-label-md text-label-md hover:bg-primary-fixed transition-colors" href="#">
+                                        원문 링크 <span class="material-symbols-outlined text-[16px]">open_in_new</span>
+</a>
+</div>
+</div>
+</article>
+</div>
+</section>
+<!-- 최근 변경 행정규칙 목록 Section -->
+<section>
+<h3 class="font-headline-sm text-headline-sm text-on-surface mb-md flex items-center gap-2 mt-lg">
+<span class="material-symbols-outlined text-primary">rule</span>
+                        최근 변경 행정규칙
+                    </h3>
+<div class="space-y-md">
+<!-- Card 3: 행정규칙 개정 -->
+<article class="bg-surface rounded-xl border border-neutral p-md hover:shadow-[0px_4px_12px_rgba(0,0,0,0.05)] transition-shadow">
+<div class="flex flex-col md:flex-row gap-md md:items-start justify-between">
+<div class="flex-1">
+<div class="flex items-center gap-sm mb-2">
+<span class="bg-status-enactment/10 text-status-enactment px-2 py-0.5 rounded font-label-md text-label-md">개정</span>
+<span class="font-body-sm text-body-sm text-outline">환경부</span>
+</div>
+<h4 class="font-headline-sm text-headline-sm text-on-surface mb-1">화학물질의 등록 및 평가 등에 관한 법률에 따른 위해성평가의 구체적 방법 등에 관한 규정</h4>
+<p class="font-body-sm text-body-sm text-on-surface-variant line-clamp-2 mb-3">
+                                        위해성평가의 정확성과 신뢰성을 제고하기 위하여 노출평가 및 위해도 결정 방법을 구체화하고, 평가보고서 작성 기준을 명확히 함.
+                                    </p>
+<div class="flex flex-wrap items-center gap-md font-body-sm text-body-sm text-outline-variant">
+<span class="flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">campaign</span> 발령일: 2023.10.12</span>
+<span class="flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">play_circle</span> 시행일: 2023.10.12</span>
+</div>
+</div>
+<div class="shrink-0 flex items-center justify-end">
+<a class="inline-flex items-center gap-1 border border-primary text-primary px-4 py-2 rounded-lg font-label-md text-label-md hover:bg-primary-fixed transition-colors" href="#">
+                                        원문 링크 <span class="material-symbols-outlined text-[16px]">open_in_new</span>
+</a>
+</div>
+</div>
+</article>
+</div>
+</section>
+</div>
+</div>
+</main>
+</body></html>

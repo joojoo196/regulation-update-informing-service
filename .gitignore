@@ -1,0 +1,6 @@
+.env
+.env.*
+!.env.example
+node_modules/
+recipients.json
+recipients.json.tmp

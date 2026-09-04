@@ -1,0 +1,13 @@
+{
+  "name": "environment-law-mailer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "기후에너지환경부 법령·고시 변경사항 메일링 서비스",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "nodemailer": "^7.0.6"
+  }
+}

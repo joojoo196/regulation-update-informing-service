@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+
+<html class="light" lang="ko"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>메일 발송 - 입법 서비스 대시보드</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;600&amp;family=JetBrains+Mono:wght@400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "inverse-primary": "#aac7ff",
+                        "background": "#f9f9ff",
+                        "inverse-on-surface": "#f0f0f7",
+                        "outline": "#737782",
+                        "primary": "#003874",
+                        "secondary-fixed-dim": "#7ed9a3",
+                        "primary-container": "#1a4f95",
+                        "on-primary": "#ffffff",
+                        "on-primary-container": "#a3c3ff",
+                        "tertiary": "#5e2b00",
+                        "on-secondary-container": "#087347",
+                        "on-tertiary-fixed-variant": "#733600",
+                        "background-subtle": "#F8FAFC",
+                        "surface-container-high": "#e8e8ee",
+                        "outline-variant": "#c3c6d2",
+                        "surface-container-lowest": "#ffffff",
+                        "primary-fixed": "#d6e3ff",
+                        "error-container": "#ffdad6",
+                        "surface-tint": "#2e5ea5",
+                        "surface-dim": "#d9d9e0",
+                        "on-surface-variant": "#424751",
+                        "border-neutral": "#E2E8F0",
+                        "surface": "#f9f9ff",
+                        "surface-container-low": "#f3f3fa",
+                        "tertiary-fixed-dim": "#ffb688",
+                        "secondary-fixed": "#9af6be",
+                        "on-primary-fixed": "#001b3e",
+                        "on-tertiary-container": "#ffb17e",
+                        "tertiary-container": "#813d00",
+                        "status-enactment": "#10B981",
+                        "surface-container-highest": "#e2e2e8",
+                        "on-tertiary": "#ffffff",
+                        "on-error": "#ffffff",
+                        "secondary": "#006d42",
+                        "on-secondary-fixed-variant": "#005230",
+                        "surface-variant": "#e2e2e8",
+                        "inverse-surface": "#2e3035",
+                        "surface-container": "#ededf4",
+                        "primary-fixed-dim": "#aac7ff",
+                        "tertiary-fixed": "#ffdbc7",
+                        "on-primary-fixed-variant": "#08458b",
+                        "on-surface": "#1a1c20",
+                        "on-secondary-fixed": "#002110",
+                        "on-secondary": "#ffffff",
+                        "secondary-container": "#9af6be",
+                        "on-error-container": "#93000a",
+                        "surface-bright": "#f9f9ff",
+                        "status-notice": "#007AFF",
+                        "on-background": "#1a1c20",
+                        "error": "#ba1a1a",
+                        "on-tertiary-fixed": "#311300"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "sidebar-width": "280px",
+                        "container-max": "1200px",
+                        "base": "4px",
+                        "lg": "24px",
+                        "xl": "40px",
+                        "md": "16px",
+                        "sm": "8px",
+                        "xs": "4px"
+                    },
+                    "fontFamily": {
+                        "headline-lg": ["Hanken Grotesk"],
+                        "headline-sm": ["Hanken Grotesk"],
+                        "body-sm": ["Inter"],
+                        "body-md": ["Inter"],
+                        "headline-md": ["Hanken Grotesk"],
+                        "code-sm": ["JetBrains Mono"],
+                        "body-lg": ["Inter"],
+                        "label-md": ["Inter"]
+                    },
+                    "fontSize": {
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "headline-sm": ["20px", { "lineHeight": "28px", "fontWeight": "600" }],
+                        "body-sm": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "body-md": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-md": ["24px", { "lineHeight": "32px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                        "code-sm": ["12px", { "lineHeight": "16px", "fontWeight": "400" }],
+                        "body-lg": ["18px", { "lineHeight": "28px", "fontWeight": "400" }],
+                        "label-md": ["13px", { "lineHeight": "16px", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+</head>
+<body class="bg-background-subtle text-on-surface font-body-md antialiased min-h-screen flex">
+<!-- Sidebar -->
+<nav class="hidden md:flex flex-col bg-surface-container-low border-r border-neutral h-screen w-sidebar-width fixed left-0 top-0 p-md space-y-sm z-40">
+<div class="mb-lg px-sm">
+<h1 class="font-headline-sm text-headline-sm font-black text-primary">입법 서비스</h1>
+<p class="font-body-sm text-body-sm text-on-surface-variant mt-xs">메일링 대시보드</p>
+</div>
+<button class="w-full bg-primary hover:bg-primary-container text-on-primary font-label-md text-label-md rounded-xl py-sm px-md flex items-center justify-center gap-sm transition-colors mb-md">
+<span class="material-symbols-outlined text-[18px]">add</span>
+            새 메일 작성
+        </button>
+<div class="flex-1 flex flex-col gap-xs">
+<a class="bg-primary-container text-on-primary-container font-label-md text-label-md font-bold rounded-xl py-sm px-md flex items-center gap-md" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">send</span>
+                메일 발송
+            </a>
+<a class="text-on-surface-variant hover:bg-surface-container-high transition-all font-label-md text-label-md rounded-xl py-sm px-md flex items-center gap-md" href="#">
+<span class="material-symbols-outlined">list_alt</span>
+                변경 및 고시 목록
+            </a>
+</div>
+<div class="mt-auto border-t border-neutral pt-md flex flex-col gap-xs">
+<a class="text-on-surface-variant hover:bg-surface-container-high transition-all font-label-md text-label-md rounded-xl py-sm px-md flex items-center gap-md" href="#">
+<span class="material-symbols-outlined">help</span>
+                도움말
+            </a>
+<a class="text-on-surface-variant hover:bg-surface-container-high transition-all font-label-md text-label-md rounded-xl py-sm px-md flex items-center gap-md" href="#">
+<span class="material-symbols-outlined">logout</span>
+                로그아웃
+            </a>
+</div>
+</nav>
+<!-- Mobile TopBar -->
+<header class="md:hidden flex justify-between items-center bg-surface border-b border-neutral px-md py-sm w-full fixed top-0 z-50">
+<h1 class="font-headline-sm text-headline-sm font-black text-primary">입법 서비스</h1>
+<button class="p-xs text-on-surface-variant">
+<span class="material-symbols-outlined">menu</span>
+</button>
+</header>
+<!-- Main Content -->
+<main class="flex-1 md:ml-[280px] pt-[60px] md:pt-0 p-lg max-w-container-max mx-auto w-full">
+<div class="mb-lg">
+<h2 class="font-headline-lg text-headline-lg text-on-surface">메일 발송</h2>
+<p class="font-body-md text-body-md text-on-surface-variant mt-sm">환경 관련 법령·고시 변경사항을 수신자에게 발송합니다.</p>
+</div>
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-lg">
+<!-- Left Column: Sending Settings (Bento Item) -->
+<div class="lg:col-span-5 flex flex-col gap-lg">
+<section class="bg-surface-container-lowest border border-neutral rounded-xl p-lg flex flex-col gap-md">
+<h3 class="font-headline-sm text-headline-sm text-on-surface flex items-center gap-sm border-b border-neutral pb-sm">
+<span class="material-symbols-outlined text-primary">settings</span>
+                        발송 설정
+                    </h3>
+<div class="flex flex-col gap-sm">
+<label class="font-label-md text-label-md text-on-surface">대상 기간</label>
+<select class="w-full bg-surface-container border border-neutral rounded-lg px-md py-sm font-body-sm text-body-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-colors">
+<option>최근 1주일 (신규 수집분)</option>
+<option>최근 1개월</option>
+<option>직접 선택</option>
+</select>
+</div>
+<div class="flex flex-col gap-sm">
+<label class="font-label-md text-label-md text-on-surface">대상 법령/규칙 유형</label>
+<div class="flex flex-wrap gap-sm">
+<label class="flex items-center gap-xs cursor-pointer">
+<input checked="" class="rounded border-neutral text-primary focus:ring-primary" type="checkbox"/>
+<span class="font-body-sm text-body-sm">환경 관련 전체</span>
+</label>
+<label class="flex items-center gap-xs cursor-pointer">
+<input checked="" class="rounded border-neutral text-primary focus:ring-primary" type="checkbox"/>
+<span class="font-body-sm text-body-sm">입법예고</span>
+</label>
+<label class="flex items-center gap-xs cursor-pointer">
+<input checked="" class="rounded border-neutral text-primary focus:ring-primary" type="checkbox"/>
+<span class="font-body-sm text-body-sm">개정 고시</span>
+</label>
+</div>
+</div>
+</section>
+<section class="bg-surface-container-lowest border border-neutral rounded-xl p-lg flex flex-col gap-md">
+<h3 class="font-headline-sm text-headline-sm text-on-surface flex items-center gap-sm border-b border-neutral pb-sm">
+<span class="material-symbols-outlined text-primary">mail</span>
+                        메일 미리보기
+                    </h3>
+<div class="flex flex-col gap-xs">
+<span class="font-label-md text-label-md text-on-surface-variant">제목</span>
+<div class="font-body-md text-body-md bg-surface-container-low border border-neutral rounded-lg p-sm truncate">
+                            [환경법규 알림] 2023년 10월 25일 법령 제·개정사항
+                        </div>
+</div>
+</section>
+</div>
+<!-- Right Column: Recipient Management -->
+<div class="lg:col-span-7">
+<section class="bg-surface-container-lowest border border-neutral rounded-xl p-lg h-full flex flex-col">
+<div class="flex justify-between items-end border-b border-neutral pb-sm mb-md">
+<h3 class="font-headline-sm text-headline-sm text-on-surface flex items-center gap-sm">
+<span class="material-symbols-outlined text-primary">group</span>
+                            수신자 관리
+                        </h3>
+<span class="font-label-md text-label-md text-primary bg-primary-fixed px-sm py-xs rounded-full">총 3명</span>
+</div>
+<div class="flex gap-sm mb-md">
+<input class="flex-1 bg-surface-container border border-neutral rounded-lg px-md py-sm font-body-sm text-body-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-colors" placeholder="이메일 주소 입력" type="email"/>
+<button class="bg-surface-container-high border border-neutral hover:bg-surface-dim text-on-surface font-label-md text-label-md rounded-lg px-md py-sm transition-colors whitespace-nowrap">
+                            추가
+                        </button>
+</div>
+<div class="flex-1 border border-neutral rounded-lg overflow-hidden bg-surface-container-low flex flex-col">
+<!-- List Header -->
+<div class="grid grid-cols-12 gap-sm p-sm border-b border-neutral bg-surface-container font-label-md text-label-md text-on-surface-variant">
+<div class="col-span-1 flex justify-center"><input checked="" class="rounded border-neutral text-primary focus:ring-primary" type="checkbox"/></div>
+<div class="col-span-8">이메일 주소</div>
+<div class="col-span-3 text-center">관리</div>
+</div>
+<!-- List Items -->
+<div class="overflow-y-auto max-h-[300px]">
+<div class="grid grid-cols-12 gap-sm p-sm border-b border-neutral items-center hover:bg-surface-container-highest transition-colors bg-surface-container-lowest">
+<div class="col-span-1 flex justify-center"><input checked="" class="rounded border-neutral text-primary focus:ring-primary" type="checkbox"/></div>
+<div class="col-span-8 font-body-sm text-body-sm truncate">compliance@company.com</div>
+<div class="col-span-3 flex justify-center">
+<button class="text-on-surface-variant hover:text-error transition-colors p-xs rounded-full hover:bg-error-container">
+<span class="material-symbols-outlined text-[18px]">delete</span>
+</button>
+</div>
+</div>
+<div class="grid grid-cols-12 gap-sm p-sm border-b border-neutral items-center hover:bg-surface-container-highest transition-colors bg-surface-container-lowest">
+<div class="col-span-1 flex justify-center"><input checked="" class="rounded border-neutral text-primary focus:ring-primary" type="checkbox"/></div>
+<div class="col-span-8 font-body-sm text-body-sm truncate">legal_team@lawfirm.co.kr</div>
+<div class="col-span-3 flex justify-center">
+<button class="text-on-surface-variant hover:text-error transition-colors p-xs rounded-full hover:bg-error-container">
+<span class="material-symbols-outlined text-[18px]">delete</span>
+</button>
+</div>
+</div>
+<div class="grid grid-cols-12 gap-sm p-sm border-b border-neutral items-center hover:bg-surface-container-highest transition-colors bg-surface-container-lowest">
+<div class="col-span-1 flex justify-center"><input checked="" class="rounded border-neutral text-primary focus:ring-primary" type="checkbox"/></div>
+<div class="col-span-8 font-body-sm text-body-sm truncate">env_officer@gov.kr</div>
+<div class="col-span-3 flex justify-center">
+<button class="text-on-surface-variant hover:text-error transition-colors p-xs rounded-full hover:bg-error-container">
+<span class="material-symbols-outlined text-[18px]">delete</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</section>
+</div>
+</div>
+<!-- Action Area -->
+<div class="mt-xl flex justify-end">
+<button class="bg-primary hover:bg-primary-container text-on-primary font-headline-sm text-headline-sm rounded-xl py-md px-xl flex items-center gap-sm transition-all shadow-sm hover:shadow-md hover:scale-[1.02]" onclick="document.getElementById('confirm-modal').classList.remove('hidden')">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">send</span>
+                메일 발송
+            </button>
+</div>
+</main>
+<!-- Confirmation Modal -->
+<div class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-on-surface/40 backdrop-blur-sm p-md" id="confirm-modal">
+<div class="bg-surface-container-lowest border border-neutral rounded-xl w-full max-w-md shadow-lg flex flex-col overflow-hidden">
+<div class="p-lg border-b border-neutral">
+<h2 class="font-headline-md text-headline-md text-on-surface">발송 전 확인</h2>
+<p class="font-body-sm text-body-sm text-on-surface-variant mt-xs">선택한 설정으로 메일을 발송하시겠습니까?</p>
+</div>
+<div class="p-lg flex flex-col gap-md bg-surface-subtle">
+<div class="flex justify-between items-center p-sm bg-surface-container-low rounded-lg border border-neutral">
+<span class="font-label-md text-label-md text-on-surface-variant">대상 수신자</span>
+<span class="font-headline-sm text-headline-sm text-primary">3명</span>
+</div>
+<div class="flex justify-between items-center p-sm bg-surface-container-low rounded-lg border border-neutral">
+<span class="font-label-md text-label-md text-on-surface-variant">발송 대상 건수</span>
+<span class="font-headline-sm text-headline-sm text-primary">12건</span>
+</div>
+<div class="flex flex-col gap-xs mt-sm">
+<span class="font-label-md text-label-md text-on-surface-variant">메일 제목</span>
+<span class="font-body-sm text-body-sm text-on-surface">[환경법규 알림] 2023년 10월 25일 법령 제·개정사항</span>
+</div>
+</div>
+<div class="p-md border-t border-neutral flex justify-end gap-sm bg-surface-container-lowest">
+<button class="px-md py-sm rounded-lg border border-neutral text-on-surface hover:bg-surface-container transition-colors font-label-md text-label-md" onclick="document.getElementById('confirm-modal').classList.add('hidden')">취소</button>
+<button class="px-md py-sm rounded-lg bg-primary text-on-primary hover:bg-primary-container transition-colors font-label-md text-label-md flex items-center gap-xs" onclick="document.getElementById('confirm-modal').classList.add('hidden')">
+<span class="material-symbols-outlined text-[18px]" style="font-variation-settings: 'FILL' 1;">send</span>
+                    최종 발송
+                </button>
+</div>
+</div>
+</div>
+</body></html>
