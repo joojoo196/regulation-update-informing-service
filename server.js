@@ -1,7 +1,10 @@
 const http = require('node:http');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const nodemailer = require('nodemailer');
+const PptxGenJS = require(process.env.PPTXGENJS_PATH || 'C:\\Users\\jojow\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\node_modules\\pptxgenjs');
 
 const localEnvPath = path.join(__dirname, '.env');
 if (fs.existsSync(localEnvPath)) {
@@ -16,6 +19,7 @@ const API_KEY = process.env.LAW_API_OC || '';
 const AGENCY = '기후에너지환경부';
 const LAW_API = 'https://www.law.go.kr/DRF/lawSearch.do';
 const LAW_SERVICE_API = 'https://www.law.go.kr/DRF/lawService.do';
+const MCEE_RECENT_LAWS_URL = 'https://www.mcee.go.kr/home/web/index.do?menuId=69';
 const RECENT_PROMULGATED_LAWS_URL = 'https://www.law.go.kr/LSW/nwRvsLsPop.do?chrIdx=7&cptOfi=1482000&sortIdx=0';
 const UPCOMING_LAWS_URL = 'https://www.law.go.kr/LSW/efLsPop.do?chrIdx=7&cptOfi=1482000&sortIdx=0';
 const LEGISLATION_NOTICE_URL = 'https://mcee.go.kr/home/web/lawMaking/list.do';
@@ -24,6 +28,173 @@ const MAIL_FROM_NAME = process.env.MAIL_FROM_NAME || '환경법령 알림서비�
 const MAIL_USER = process.env.MAIL_USER || '';
 const MAIL_APP_PASSWORD = process.env.MAIL_APP_PASSWORD || '';
 const RECIPIENTS_FILE = path.join(__dirname, 'recipients.json');
+const ARTIFACT_TOOL_MODULE = 'C:\\Users\\jojow\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\node_modules\\@oai\\artifact-tool\\dist\\artifact_tool.mjs';
+
+const PPT = {
+  navy: '1F2E70',
+  navySoft: 'E9EDFA',
+  ink: '263045',
+  muted: '5F6B7C',
+  line: 'DCE2EB',
+  card: 'F3F5F9',
+  green: '087347',
+  blue: '2167C8',
+  font: '맑은 고딕'
+};
+
+function pptText(value, max = 70) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function pptDate(value) {
+  return String(value || '').replace(/\./g, '.').trim() || '일정 미정';
+}
+
+function addPptTitle(slide, eyebrow, title, page) {
+  slide.addText(eyebrow, { x: 0.9, y: 0.55, w: 7.7, h: 0.28, fontFace: PPT.font, fontSize: 10, bold: true, color: PPT.muted, breakLine: false, margin: 0 });
+  slide.addText(title, { x: 0.9, y: 0.88, w: 10.2, h: 0.62, fontFace: PPT.font, fontSize: 29, bold: true, color: PPT.navy, margin: 0, fit: 'shrink' });
+  slide.addText(String(page).padStart(2, '0'), { x: 12.42, y: 7.16, w: 0.35, h: 0.18, fontFace: PPT.font, fontSize: 8, color: '9AA6B7', align: 'right', margin: 0 });
+}
+
+function addPptFooter(slide, from, to) {
+  slide.addShape('line', { x: 0.9, y: 6.98, w: 11.45, h: 0, line: { color: PPT.line, width: 0.7 } });
+  slide.addText(`수집 기간  ${from} ~ ${to}    |    출처  기후에너지환경부 · 국가법령정보센터`, { x: 0.9, y: 7.08, w: 8.8, h: 0.2, fontFace: PPT.font, fontSize: 7.5, color: '7B8491', margin: 0 });
+}
+
+async function buildPptSummary(items, from, to) {
+  const pptx = new PptxGenJS();
+  pptx.layout = 'LAYOUT_WIDE';
+  pptx.author = '법규 개정 알림 서비스';
+  pptx.subject = '기후에너지환경부 최근 법규 개정 요약';
+  pptx.title = `법규 개정 요약 (${from}~${to})`;
+  pptx.company = '법규 개정 알림 서비스';
+  pptx.lang = 'ko-KR';
+  pptx.theme = { headFontFace: PPT.font, bodyFontFace: PPT.font, lang: 'ko-KR' };
+  const groups = [
+    ['legislationNotice', '입법예고'], ['revisedLaw', '개정법령'],
+    ['administrativeNotice', '행정예고'], ['revisedNotice', '개정 행정규칙']
+  ];
+  const grouped = Object.fromEntries(groups.map(([key]) => [key, items.filter((item) => item.group === key)]));
+  const priority = [...grouped.revisedLaw, ...grouped.revisedNotice, ...grouped.legislationNotice, ...grouped.administrativeNotice];
+
+  // 1. 표지
+  let slide = pptx.addSlide();
+  slide.background = { color: 'FFFFFF' };
+  slide.addShape(pptx.ShapeType.ellipse, { x: 9.1, y: 3.8, w: 5.9, h: 5.9, fill: { color: PPT.navySoft, transparency: 12 }, line: { color: PPT.navySoft, transparency: 100 } });
+  slide.addShape(pptx.ShapeType.ellipse, { x: -0.8, y: -0.8, w: 2.2, h: 2.2, fill: { color: PPT.navy, transparency: 5 }, line: { color: PPT.navy, transparency: 100 } });
+  slide.addText('법규 개정 요약 보고', { x: 0.9, y: 1.9, w: 6.7, h: 0.28, fontFace: PPT.font, fontSize: 11, bold: true, color: PPT.muted, margin: 0 });
+  slide.addText('최근 제개정사항', { x: 0.9, y: 2.32, w: 9.2, h: 0.78, fontFace: PPT.font, fontSize: 38, bold: true, color: PPT.navy, margin: 0 });
+  slide.addText('기후에너지환경부 소관 법령·행정규칙 요약', { x: 0.9, y: 3.45, w: 9.6, h: 0.36, fontFace: PPT.font, fontSize: 17, color: PPT.ink, margin: 0 });
+  slide.addShape(pptx.ShapeType.ellipse, { x: 0.9, y: 6.38, w: 0.12, h: 0.12, fill: { color: PPT.navy }, line: { color: PPT.navy } });
+  slide.addText(`수집기간  ${from} ~ ${to}`, { x: 1.14, y: 6.31, w: 3.4, h: 0.2, fontFace: PPT.font, fontSize: 9, color: PPT.muted, margin: 0 });
+  slide.addShape(pptx.ShapeType.ellipse, { x: 5.12, y: 6.38, w: 0.12, h: 0.12, fill: { color: PPT.navy }, line: { color: PPT.navy } });
+  slide.addText(`총 ${items.length}건`, { x: 5.36, y: 6.31, w: 1.5, h: 0.2, fontFace: PPT.font, fontSize: 9, color: PPT.muted, margin: 0 });
+
+  // 2. 현황
+  slide = pptx.addSlide();
+  slide.background = { color: 'FFFFFF' };
+  addPptTitle(slide, 'OVERVIEW', '수집 현황', 2);
+  const cards = groups.map(([key, label]) => ({ label, count: grouped[key].length }));
+  cards.forEach((card, index) => {
+    const x = 0.9 + index * 3.03;
+    slide.addShape(pptx.ShapeType.roundRect, { x, y: 2.08, w: 2.72, h: 1.55, rectRadius: 0.08, fill: { color: PPT.card }, line: { color: PPT.card } });
+    slide.addText(card.label, { x: x + 0.28, y: 2.4, w: 2.15, h: 0.26, fontFace: PPT.font, fontSize: 12, bold: true, color: PPT.ink, margin: 0, align: 'center' });
+    slide.addText(`${card.count}건`, { x: x + 0.28, y: 2.82, w: 2.15, h: 0.42, fontFace: PPT.font, fontSize: 24, bold: true, color: index < 2 ? PPT.navy : PPT.blue, margin: 0, align: 'center' });
+  });
+  slide.addText('주요 항목', { x: 0.9, y: 4.28, w: 2.0, h: 0.3, fontFace: PPT.font, fontSize: 16, bold: true, color: PPT.navy, margin: 0 });
+  const highlights = priority.slice(0, 5);
+  if (!highlights.length) {
+    slide.addText('해당 기간에 수집된 변경사항이 없습니다.', { x: 0.9, y: 4.86, w: 8.3, h: 0.35, fontFace: PPT.font, fontSize: 15, color: PPT.muted, margin: 0 });
+  } else {
+    highlights.forEach((item, index) => {
+      const y = 4.78 + index * 0.38;
+      slide.addShape(pptx.ShapeType.ellipse, { x: 0.96, y: y + 0.08, w: 0.08, h: 0.08, fill: { color: PPT.navy }, line: { color: PPT.navy } });
+      slide.addText(`${pptText(item.title, 46)}  (${item.status})`, { x: 1.2, y, w: 9.9, h: 0.25, fontFace: PPT.font, fontSize: 11, color: PPT.ink, margin: 0, fit: 'shrink' });
+    });
+  }
+  addPptFooter(slide, from, to);
+
+  // 3~4. 모든 변경 항목을 7건씩 나누어 표시
+  const addChangeTable = (itemsForSlide, page, chunkIndex) => {
+    const tableSlide = pptx.addSlide();
+    tableSlide.background = { color: 'FFFFFF' };
+    addPptTitle(tableSlide, 'KEY AMENDMENTS', chunkIndex ? `주요 변경 항목 ${chunkIndex + 1}` : '주요 변경 항목', page);
+    const rows = itemsForSlide.map((item) => [item.status, pptText(item.title, 38), pptDate(item.changedAt), (item.keywords || []).slice(0, 3).join(', ') || '-']);
+    tableSlide.addTable([
+      [
+        { text: '구분', options: { bold: true, color: 'FFFFFF', fill: PPT.navy, align: 'center' } },
+        { text: '법령·행정규칙명', options: { bold: true, color: 'FFFFFF', fill: PPT.navy, align: 'center' } },
+        { text: '공포·발령·예고일', options: { bold: true, color: 'FFFFFF', fill: PPT.navy, align: 'center' } },
+        { text: '핵심 키워드', options: { bold: true, color: 'FFFFFF', fill: PPT.navy, align: 'center' } }
+      ],
+      ...(rows.length ? rows : [['-', '수집된 변경사항이 없습니다.', '-', '-']])
+    ], {
+      x: 0.9, y: 1.95, w: 11.5, h: 4.3, rowH: 0.52, colW: [1.4, 4.5, 2.1, 3.5],
+      border: { type: 'solid', color: PPT.line, pt: 0.7 }, fill: 'FFFFFF', color: PPT.ink,
+      fontFace: PPT.font, fontSize: 9, margin: 0.08, valign: 'middle', autoFit: true
+    });
+    const start = chunkIndex * 7 + 1;
+    const end = Math.min(start + itemsForSlide.length - 1, priority.length);
+    tableSlide.addText(`전체 ${priority.length}건 중 ${start}~${end}번째 항목`, { x: 0.9, y: 6.46, w: 3.2, h: 0.2, fontFace: PPT.font, fontSize: 8.5, color: PPT.muted, margin: 0 });
+    tableSlide.addText('키워드는 제정·개정 이유와 제목을 바탕으로 대상, 지원내용, 규제변화 중심으로 추출했습니다.', { x: 4.1, y: 6.46, w: 7.6, h: 0.2, fontFace: PPT.font, fontSize: 8.5, color: PPT.muted, margin: 0, align: 'right' });
+    addPptFooter(tableSlide, from, to);
+  };
+  const changeChunks = priority.length ? Array.from({ length: Math.ceil(priority.length / 7) }, (_, index) => priority.slice(index * 7, index * 7 + 7)) : [[]];
+  changeChunks.forEach((chunk, index) => addChangeTable(chunk, 3 + index, index));
+
+  // 모든 항목의 시행·예고 일정과 확인 경로. 14건마다 다음 페이지를 만듭니다.
+  const scheduled = [...priority].sort((a, b) => String(a.effectiveAt || a.noticeEndAt || a.changedAt).localeCompare(String(b.effectiveAt || b.noticeEndAt || b.changedAt)));
+  const scheduleChunks = scheduled.length ? Array.from({ length: Math.ceil(scheduled.length / 14) }, (_, index) => scheduled.slice(index * 14, index * 14 + 14)) : [[]];
+  const addScheduleSlide = (itemsForSlide, page, chunkIndex) => {
+    const scheduleSlide = pptx.addSlide();
+    scheduleSlide.background = { color: 'FFFFFF' };
+    addPptTitle(scheduleSlide, 'SCHEDULE & SOURCES', chunkIndex ? `시행·예고 일정과 확인 경로 ${chunkIndex + 1}` : '시행·예고 일정과 확인 경로', page);
+    scheduleSlide.addShape(pptx.ShapeType.roundRect, { x: 0.9, y: 1.95, w: 8.25, h: 4.75, rectRadius: 0.08, fill: { color: PPT.card }, line: { color: PPT.card } });
+    const start = chunkIndex * 14 + 1;
+    const end = Math.min(start + itemsForSlide.length - 1, scheduled.length);
+    scheduleSlide.addText(`일정 목록  ·  전체 ${scheduled.length}건 중 ${start}~${end}건`, { x: 1.25, y: 2.28, w: 4.3, h: 0.28, fontFace: PPT.font, fontSize: 15, bold: true, color: PPT.navy, margin: 0 });
+    if (!itemsForSlide.length) {
+      scheduleSlide.addText('표시할 항목이 없습니다.', { x: 1.25, y: 3.0, w: 5.8, h: 0.3, fontFace: PPT.font, fontSize: 12, color: PPT.muted, margin: 0 });
+    } else {
+      itemsForSlide.forEach((item, index) => {
+        const column = index < 7 ? 0 : 1;
+        const row = index % 7;
+        const x = column ? 5.2 : 1.25;
+        const y = 2.88 + row * 0.48;
+        const date = item.effectiveAt ? `시행 ${pptDate(item.effectiveAt)}` : item.noticeEndAt ? `예고 종료 ${pptDate(item.noticeEndAt)}` : `공포·발령 ${pptDate(item.changedAt)}`;
+        scheduleSlide.addShape(pptx.ShapeType.ellipse, { x, y: y + 0.05, w: 0.13, h: 0.13, fill: { color: index === 0 ? PPT.navy : PPT.blue }, line: { color: index === 0 ? PPT.navy : PPT.blue } });
+        scheduleSlide.addText(date, { x: x + 0.28, y, w: 1.35, h: 0.18, fontFace: PPT.font, fontSize: 8, bold: true, color: PPT.navy, margin: 0, fit: 'shrink' });
+        scheduleSlide.addText(pptText(item.title, 25), { x: x + 1.68, y, w: 2.08, h: 0.2, fontFace: PPT.font, fontSize: 8.5, color: PPT.ink, margin: 0, fit: 'shrink' });
+      });
+    }
+    scheduleSlide.addShape(pptx.ShapeType.roundRect, { x: 9.48, y: 1.95, w: 2.92, h: 4.75, rectRadius: 0.08, fill: { color: 'FFFFFF' }, line: { color: PPT.line, width: 1 } });
+    scheduleSlide.addText('원문 확인', { x: 9.83, y: 2.28, w: 2.1, h: 0.3, fontFace: PPT.font, fontSize: 15, bold: true, color: PPT.navy, margin: 0 });
+    scheduleSlide.addText('각 항목의 원문 링크와 신구법 비교 링크는 웹페이지의 최근 제개정사항 목록에서 확인할 수 있습니다.', { x: 9.83, y: 2.9, w: 2.2, h: 1.1, fontFace: PPT.font, fontSize: 9.5, color: PPT.ink, margin: 0.02, fit: 'shrink' });
+    scheduleSlide.addText('수집 기준', { x: 9.83, y: 4.48, w: 1.8, h: 0.2, fontFace: PPT.font, fontSize: 10, bold: true, color: PPT.navy, margin: 0 });
+    scheduleSlide.addText('공포·발령일 최근 7일, 행정예고는 예고 시작일 최근 7일 또는 미래 항목', { x: 9.83, y: 4.85, w: 2.2, h: 0.8, fontFace: PPT.font, fontSize: 8.5, color: PPT.muted, margin: 0.02, fit: 'shrink' });
+    addPptFooter(scheduleSlide, from, to);
+  };
+  scheduleChunks.forEach((chunk, index) => addScheduleSlide(chunk, 3 + changeChunks.length + index, index));
+
+  const generated = await pptx.write('nodebuffer');
+  return normalizePptBuffer(generated);
+}
+
+async function normalizePptBuffer(buffer) {
+  const id = `law-summary-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const sourcePath = path.join(os.tmpdir(), `${id}.pptx`);
+  const outputPath = path.join(os.tmpdir(), `${id}-normalized.pptx`);
+  try {
+    await fs.promises.writeFile(sourcePath, buffer);
+    const { FileBlob, PresentationFile } = await import(pathToFileURL(ARTIFACT_TOOL_MODULE).href);
+    const presentation = await PresentationFile.importPptx(await FileBlob.load(sourcePath));
+    await (await PresentationFile.exportPptx(presentation)).save(outputPath);
+    return fs.promises.readFile(outputPath);
+  } finally {
+    await Promise.all([fs.promises.unlink(sourcePath).catch(() => {}), fs.promises.unlink(outputPath).catch(() => {})]);
+  }
+}
 
 function normalizeRecipients(values) {
   return [...new Set(asArray(values).map((value) => String(value).trim().toLowerCase()).filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)))];
@@ -76,10 +247,9 @@ function dateKey(value) {
   return digits.length >= 8 ? digits.slice(0, 8) : '';
 }
 
-function isRecentOrUpcoming(item, publicationField, effectiveField, from, today, future) {
+function isRecentPublication(item, publicationField, from, today) {
   const published = dateKey(item[publicationField]);
-  const effective = dateKey(item[effectiveField]);
-  return (published >= from && published <= today) || (effective >= today && effective <= future);
+  return published >= from && published <= today;
 }
 
 function rowsFromHtml(html) {
@@ -116,8 +286,8 @@ function officialLawFromRow(cells, baseUrl) {
   const titleAttribute = attributes.match(/\btitle="([^"]+)"/i);
   const title = decodeHtml(titleAttribute ? titleAttribute[1] : anchor[4]).replace(/\s*팝업으로 이동\s*$/, '');
   const href = anchor[2].replace(/&amp;/gi, '&').replace(/;jsessionid=[^?]+/i, '');
-  const url = new URL(href, baseUrl).href;
-  const lsiSeq = new URL(url).searchParams.get('lsiSeq') || `${dateKey(decodeHtml(cells[6]))}-${title}`;
+  const detailUrl = new URL(href, 'https://www.law.go.kr/LSW/').href;
+  const lsiSeq = new URL(detailUrl).searchParams.get('lsiSeq') || `${dateKey(decodeHtml(cells[6]))}-${title}`;
   const changedAt = displayDate(dateKey(decodeHtml(cells[6])));
   const effectiveAt = displayDate(dateKey(decodeHtml(cells[7])));
   return {
@@ -134,22 +304,41 @@ function officialLawFromRow(cells, baseUrl) {
     noticeNumber: decodeHtml(cells[5]),
     keywords: [],
     comparisonUrl: `https://www.law.go.kr/LSW/lsOldAndNew.do?lsiSeq=${encodeURIComponent(lsiSeq)}`,
-    url
+    url: detailUrl
   };
 }
 
-async function fetchOfficialLawListings(from, today, future) {
-  const sources = [RECENT_PROMULGATED_LAWS_URL, UPCOMING_LAWS_URL];
-  const pages = await Promise.all(sources.map(async (url) => ({ url, html: await requestHtml(url) })));
-  const items = pages.flatMap(({ url, html }) => rowsFromHtml(html).map((cells) => officialLawFromRow(cells, url)).filter(Boolean));
-  const filtered = items.filter((item) => item.agency === AGENCY && (
-    (dateKey(item.changedAt) >= from && dateKey(item.changedAt) <= today) ||
-    (dateKey(item.effectiveAt) >= today && dateKey(item.effectiveAt) <= future)
-  ));
+async function fetchMceeRecentLawListings(from, today) {
+  const items = [];
+  const pageSize = 15;
+  const maxPages = 10;
+  for (let page = 0; page < maxPages; page += 1) {
+    const url = new URL(MCEE_RECENT_LAWS_URL);
+    url.searchParams.set('pagerOffset', String(page * pageSize));
+    const html = await requestHtml(url);
+    const pageItems = rowsFromHtml(html).map((cells) => officialLawFromRow(cells, url)).filter(Boolean);
+    if (!pageItems.length) break;
+    items.push(...pageItems);
+    const oldestDate = pageItems.map((item) => dateKey(item.changedAt)).filter(Boolean).sort().at(0);
+    if (!oldestDate || oldestDate < from) break;
+  }
+  const filtered = items.filter((item) => item.agency.includes(AGENCY) && dateKey(item.changedAt) >= from && dateKey(item.changedAt) <= today);
   const unique = new Map(filtered.map((item) => [item.id, item]));
   return Promise.all([...unique.values()].map(async (item) => ({
     ...item,
-    keywords: await getReasonKeywords('law', { MST: item.id.replace(/^law-/, '') })
+    keywords: await getReasonKeywords('law', { MST: item.id.replace(/^law-/, '') }, item.title)
+  })));
+}
+
+async function fetchOfficialLawListings(from, today) {
+  const sources = [RECENT_PROMULGATED_LAWS_URL, UPCOMING_LAWS_URL];
+  const pages = await Promise.all(sources.map(async (url) => ({ url, html: await requestHtml(url) })));
+  const items = pages.flatMap(({ url, html }) => rowsFromHtml(html).map((cells) => officialLawFromRow(cells, url)).filter(Boolean));
+  const filtered = items.filter((item) => item.agency.includes(AGENCY) && dateKey(item.changedAt) >= from && dateKey(item.changedAt) <= today);
+  const unique = new Map(filtered.map((item) => [item.id, item]));
+  return Promise.all([...unique.values()].map(async (item) => ({
+    ...item,
+    keywords: await getReasonKeywords('law', { MST: item.id.replace(/^law-/, '') }, item.title)
   })));
 }
 
@@ -164,10 +353,10 @@ async function fetchLegislationNotices(from, to) {
       agency: decodeHtml(cells[4]), changedAt: displayDate(published), announcedAt: displayDate(published),
       effectiveAt: '', kind: '입법예고', noticeNumber: decodeHtml(cells[3]), url: anchor.url
     };
-  }).filter((item) => item.agency === AGENCY && dateKey(item.changedAt) >= from && dateKey(item.changedAt) <= to);
+  }).filter((item) => item.agency.includes(AGENCY) && dateKey(item.changedAt) >= from && dateKey(item.changedAt) <= to);
 }
 
-async function fetchAdministrativeNotices(from, to) {
+async function fetchAdministrativeNotices(from) {
   const html = await requestHtml(ADMIN_NOTICE_URL);
   return rowsFromHtml(html).filter((cells) => cells.length >= 7).map((cells) => {
     const anchor = anchorFromCell(cells[1], ADMIN_NOTICE_URL);
@@ -179,7 +368,9 @@ async function fetchAdministrativeNotices(from, to) {
       agency: AGENCY, changedAt: displayDate(start), announcedAt: displayDate(start), effectiveAt: '',
       noticeEndAt: displayDate(end), kind: '행정예고', noticeNumber: decodeHtml(cells[2]), department: decodeHtml(cells[6]), url: anchor.url
     };
-  }).filter((item) => dateKey(item.changedAt) >= from && dateKey(item.changedAt) <= to);
+  // 예고 시작일이 최근 7일 안이거나 미래인 자료를 포함한다.
+  // 이미 시작한 지 7일이 지난 예고는 목록에서 제외한다.
+  }).filter((item) => dateKey(item.changedAt) >= from);
 }
 
 async function requestApi(params) {
@@ -227,24 +418,86 @@ function findField(value, fieldName) {
   return '';
 }
 
-function extractReasonKeywords(reason) {
-  const stopWords = new Set(['개정', '제정', '일부개정', '전부개정', '법령', '법률', '규정', '시행령', '시행규칙', '내용', '사항', '이유', '주요내용', '관련', '관한', '소관', '경우', '등의', '등을', '등에', '위한', '따라', '통해', '대한', '현재', '현행', '이러한', '위하여', '하고', '있는', '있도록', '필요', '목적', '마련', '정비', '개선', '보완']);
-  const words = decodeHtml(reason).match(/[가-힣]{2,}/g) || [];
+function extractReasonKeywords(reason, title = '') {
+  const stopWords = new Set(['개정', '제정', '일부개정', '전부개정', '법령', '법률', '규정', '시행령', '시행규칙', '특별법', '내용', '사항', '이유', '주요내용', '관련', '관한', '소관', '경우', '등', '또', '하', '및', '대한', '위한', '따라', '통해', '현재', '현행', '필요', '목적', '마련', '정비', '개선', '보완', '만원', '이상', '이하', '종전', '앞으로', '사업', '사유', '결과', '수립', '장관', '기관']);
+  const suffix = /(으로부터|으로는|으로|에서|에게|부터|까지|에는|이나|이며|이고|하고|의|은|는|을|를|와|과|에)$/u;
+  const normalize = (value) => String(value || '').replace(/^[^가-힣A-Za-z0-9ㆍ·]+|[^가-힣A-Za-z0-9ㆍ·]+$/g, '').replace(suffix, '').trim();
+  const useful = (value) => value.length >= 2 && !stopWords.has(value) && !/^\d+$/.test(value) && !/^(가|나|다|라|마|등|또|하)$/.test(value);
+  const buckets = { target: new Map(), support: new Map(), regulation: new Map(), general: new Map() };
+  const add = (bucket, value, score, index = 0) => {
+    const parts = String(value || '').split(/\s+/).map(normalize).filter(useful).slice(-3);
+    const phrase = parts.join(' ');
+    if (!phrase || phrase.length > 24) return;
+    const previous = bucket.get(phrase) || { phrase, score: 0, index };
+    previous.score = Math.max(previous.score, score);
+    previous.index = Math.min(previous.index, index);
+    bucket.set(phrase, previous);
+  };
+  const text = decodeHtml(reason);
+  const words = (text.match(/[가-힣A-Za-z0-9ㆍ·]{2,}/g) || []).map(normalize).filter(useful);
   const counts = new Map();
-  words.forEach((rawWord, index) => {
-    const word = rawWord.replace(/(뿐만|으로|에서|에게|부터|까지|이나|이며|이고|하고|에는|에는|으로|의|은|는|이|가|을|를|와|과|에)$/u, '');
-    if (stopWords.has(word)) return;
-    const item = counts.get(word) || { word, count: 0, index };
+  words.forEach((word, index) => {
+    const item = counts.get(word) || { count: 0, index };
     item.count += 1;
     counts.set(word, item);
   });
-  return [...counts.values()].sort((a, b) => b.count - a.count || a.index - b.index).slice(0, 3).map((item) => item.word);
+  const targetPattern = /(대상|시설|지역|유역|사업자|사업|노동자|전력망|발전소|폐기물|하천|토지|기관|업체)$/;
+  const supportPattern = /(지원|지원금|보조금|융자|고용유지|재취업|보상|수수료|급여|기금)$/;
+  const regulationPattern = /(허가|승인|부과|기준|절차|고시|의무|요건|납부|지정|등록|신고|관리|처분|제한|금지|완화|강화|시정|이행강제금|과태료)$/;
+  [...counts.entries()].forEach(([word, value]) => {
+    const score = value.count * 8;
+    if (targetPattern.test(word)) add(buckets.target, word, score + 24, value.index);
+    if (supportPattern.test(word)) add(buckets.support, word, score + 38, value.index);
+    if (regulationPattern.test(word)) add(buckets.regulation, word, score + 34, value.index);
+    add(buckets.general, word, score, value.index);
+  });
+  const phraseTokens = text.replace(/[◇·ㆍ,;:()\[\]<>]/g, ' ').split(/\s+/).map(normalize);
+  phraseTokens.forEach((word, index) => {
+    if (!useful(word)) return;
+    const previous = normalize(phraseTokens[index - 1]);
+    const beforePrevious = normalize(phraseTokens[index - 2]);
+    if (supportPattern.test(word)) {
+      const phrase = /^(지원|보상|융자)$/.test(word) && previous && useful(previous) ? `${previous} ${word}` : word;
+      add(buckets.support, phrase, 78, index);
+    }
+    if (regulationPattern.test(word)) {
+      const phrase = previous && useful(previous) && !/(장관|사유|경우)$/.test(previous) ? `${previous} ${word}` : word;
+      add(buckets.regulation, phrase, 74, index);
+    }
+  });
+  const regulationPhrases = /([가-힣]{2,}(?:계획|기준|절차|관리|점용료|시설|이행강제금|과태료))[^.]{0,35}?(승인|부과|고시|지정|납부|신설|보완|강화|완화)/g;
+  for (const match of text.matchAll(regulationPhrases)) {
+    add(buckets.regulation, `${normalize(match[1])} ${normalize(match[2])}`, 96, match.index || 0);
+  }
+  const titleWords = (decodeHtml(title).match(/[가-힣A-Za-z0-9ㆍ·]{2,}/g) || []).map(normalize).filter(useful);
+  titleWords.forEach((word, index) => {
+    add(buckets.target, word, 100 - index, index);
+    if (supportPattern.test(word)) add(buckets.support, index ? `${titleWords[index - 1]} ${word}` : word, 90 - index, index);
+  });
+  const selected = [];
+  const take = (bucket) => {
+    const candidate = [...bucket.values()].sort((a, b) => b.score - a.score || a.index - b.index || b.phrase.length - a.phrase.length)
+      .find((item) => !selected.some((chosen) => chosen === item.phrase || chosen.includes(item.phrase) || item.phrase.includes(chosen)));
+    if (candidate) selected.push(candidate.phrase);
+  };
+  take(buckets.target);
+  take(buckets.support);
+  take(buckets.regulation);
+  if (selected.length < 3) take(buckets.regulation);
+  while (selected.length < 3) {
+    const candidate = [...buckets.general.values()].sort((a, b) => b.score - a.score || a.index - b.index)
+      .find((item) => !selected.some((chosen) => chosen === item.phrase || chosen.includes(item.phrase) || item.phrase.includes(chosen)));
+    if (!candidate) break;
+    selected.push(candidate.phrase);
+    buckets.general.delete(candidate.phrase);
+  }
+  return selected.slice(0, 3);
 }
 
-async function getReasonKeywords(target, identifiers) {
+async function getReasonKeywords(target, identifiers, title = '') {
   try {
     const data = await requestLawService({ target, ...identifiers });
-    return extractReasonKeywords(findField(data, '제개정이유내용'));
+    return extractReasonKeywords(findField(data, '제개정이유내용'), title);
   } catch { return []; }
 }
 
@@ -260,8 +513,17 @@ async function fetchAll(params, listKey) {
   return items;
 }
 
+function isRevisionOrNotice(item) {
+  return /제정|개정|예고/.test(String(item['제개정구분명'] || ''));
+}
+
 function isRelevant(item) {
-  return String(item['소관부처명'] || '').trim() === AGENCY && /개정|예고/.test(String(item['제개정구분명'] || ''));
+  return String(item['소관부처명'] || '').includes(AGENCY) && isRevisionOrNotice(item);
+}
+
+function isRelatedAdministrativeRule(item) {
+  // org=1482000 조건으로 조회한 결과에는 본부와 산하기관 자료가 함께 들어온다.
+  return Boolean(String(item['소관부처명'] || '').trim()) && isRevisionOrNotice(item);
 }
 
 async function getRecentChanges() {
@@ -269,17 +531,17 @@ async function getRecentChanges() {
   const dateKeys = Array.from({ length: 7 }, (_, index) => kstDate(-index));
   const range = `${dateKeys.at(-1)}~${dateKeys[0]}`;
   const today = dateKeys[0];
-  const future = kstDate(30);
   const sourceErrors = [];
-  const [recentLaws, adminRules, officialLaws, legislationResult, administrativeResult] = await Promise.all([
+  const [recentLaws, adminRules, mceeLaws, officialLaws, legislationResult, administrativeResult] = await Promise.all([
     fetchAll({ target: 'law', org: '1482000', sort: 'ddes' }, 'law'),
     fetchAll({ target: 'admrul', mobileYn: 'Y', org: '1482000', sort: 'ddes' }, 'admrul'),
-    fetchOfficialLawListings(dateKeys.at(-1), today, future).catch((error) => { sourceErrors.push(`법령 보완 목록: ${error.message}`); return []; }),
+    fetchMceeRecentLawListings(dateKeys.at(-1), today).catch((error) => { sourceErrors.push(`환경부 최근 제·개정법령: ${error.message}`); return []; }),
+    fetchOfficialLawListings(dateKeys.at(-1), today).catch((error) => { sourceErrors.push(`법령 보완 목록: ${error.message}`); return []; }),
     fetchLegislationNotices(dateKeys.at(-1), dateKeys[0]).catch((error) => { sourceErrors.push(`입법예고: ${error.message}`); return []; }),
-    fetchAdministrativeNotices(dateKeys.at(-1), dateKeys[0]).catch((error) => { sourceErrors.push(`행정예고: ${error.message}`); return []; })
+    fetchAdministrativeNotices(dateKeys.at(-1)).catch((error) => { sourceErrors.push(`행정예고: ${error.message}`); return []; })
   ]);
 
-  const laws = await Promise.all(recentLaws.filter((item) => isRelevant(item) && isRecentOrUpcoming(item, '공포일자', '시행일자', dateKeys.at(-1), today, future)).map(async (item) => ({
+  const laws = await Promise.all(recentLaws.filter((item) => isRelevant(item) && isRecentPublication(item, '공포일자', dateKeys.at(-1), today)).map(async (item) => ({
     id: `law-${item['법령일련번호']}`,
     group: 'revisedLaw',
     category: '법령',
@@ -290,15 +552,15 @@ async function getRecentChanges() {
     announcedAt: displayDate(item['공포일자']),
     effectiveAt: displayDate(item['시행일자']),
     kind: item['법령구분명'],
-    keywords: await getReasonKeywords('law', { MST: item['법령일련번호'] }),
+    keywords: await getReasonKeywords('law', { MST: item['법령일련번호'] }, item['법령명한글']),
     comparisonUrl: `https://www.law.go.kr/LSW/lsOldAndNew.do?lsiSeq=${encodeURIComponent(item['법령일련번호'])}`,
     url: `https://www.law.go.kr/법령/${encodeURIComponent(item['법령명한글'] || '')}`
   })));
 
-  const rules = await Promise.all(adminRules.filter((item) => isRelevant(item) && item['행정규칙종류'] === '고시' && isRecentOrUpcoming(item, '발령일자', '시행일자', dateKeys.at(-1), today, future)).map(async (item) => ({
+  const rules = await Promise.all(adminRules.filter((item) => isRelatedAdministrativeRule(item) && isRecentPublication(item, '발령일자', dateKeys.at(-1), today)).map(async (item) => ({
     id: `rule-${item['행정규칙일련번호']}`,
     group: 'revisedNotice',
-    category: '고시',
+    category: '행정규칙',
     status: item['제개정구분명'],
     title: item['행정규칙명'],
     agency: item['소관부처명'],
@@ -306,12 +568,13 @@ async function getRecentChanges() {
     announcedAt: displayDate(item['발령일자']),
     effectiveAt: displayDate(item['시행일자']),
     kind: item['행정규칙종류'],
-    keywords: await getReasonKeywords('admrul', { ID: item['행정규칙일련번호'] }),
+    keywords: await getReasonKeywords('admrul', { ID: item['행정규칙일련번호'] }, item['행정규칙명']),
     comparisonUrl: `https://www.law.go.kr/LSW/admRulOldAndNew.do?admRulSeq=${encodeURIComponent(item['행정규칙일련번호'])}`,
     url: `https://www.law.go.kr/행정규칙/${encodeURIComponent(item['행정규칙명'] || '')}`
   })));
 
-  const unique = new Map([...legislationResult, ...officialLaws, ...laws, ...administrativeResult, ...rules].map((item) => [item.id, item]));
+  // 환경부 최근 제·개정법령 목록을 마지막에 병합해, 동일 법령은 환경부 목록 정보를 우선한다.
+  const unique = new Map([...legislationResult, ...officialLaws, ...laws, ...mceeLaws, ...administrativeResult, ...rules].map((item) => [item.id, item]));
   return { items: [...unique.values()].sort((a, b) => b.changedAt.localeCompare(a.changedAt)), sourceErrors };
 }
 
@@ -324,20 +587,20 @@ function escapeMailHtml(value) {
   return String(value || '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 }
 
-function buildMailContent(items, from, to, introText = '기후에너지환경부 소관 최근 7일 법령·고시 변경사항을 구분하여 발송합니다.') {
+function buildMailContent(items, from, to, introText = '기후에너지환경부 소관 최근 법령·행정규칙 변경사항을 구분하여 발송합니다.') {
   const groups = [
     ['legislationNotice', '변경 법령 · 입법예고'],
     ['revisedLaw', '변경 법령 · 개정법령'],
-    ['administrativeNotice', '변경 고시 · 행정예고'],
-    ['revisedNotice', '변경 고시 · 개정고시']
+    ['administrativeNotice', '변경 행정규칙 · 행정예고'],
+    ['revisedNotice', '변경 행정규칙 · 개정 행정규칙']
   ];
   const sections = groups.map(([key, label]) => {
     const selected = items.filter((item) => item.group === key);
     const rows = selected.length ? selected.map((item) => { const keywords = (item.keywords || []).slice(0, 3).map((keyword) => `<span style="display:inline-block;background:#eef4ff;color:#003874;border-radius:999px;padding:3px 8px;margin:4px 4px 0 0;font-size:12px;font-weight:600">${escapeMailHtml(keyword)}</span>`).join(''); const comparison = ['revisedLaw', 'revisedNotice'].includes(item.group) && item.comparisonUrl ? ` <a href="${escapeMailHtml(item.comparisonUrl)}" style="color:#003874">신구법 비교 링크 ↗</a>` : ''; return `<li style="margin:0 0 16px"><a href="${escapeMailHtml(item.url)}" style="color:#003874;font-weight:700;text-decoration:none">${escapeMailHtml(item.title)}</a><br><span style="color:#626873;font-size:13px">${escapeMailHtml(item.status)} · ${escapeMailHtml(item.changedAt)}${item.noticeEndAt ? ` · 예고종료 ${escapeMailHtml(item.noticeEndAt)}` : ''}${item.effectiveAt ? ` · 시행 ${escapeMailHtml(item.effectiveAt)}` : ''}</span>${keywords ? `<br>${keywords}` : ''}<br><a href="${escapeMailHtml(item.url)}" style="color:#003874;font-size:13px">원문 링크 ↗</a>${comparison}</li>`; }).join('') : '<li style="color:#737782">해당 기간 변경사항이 없습니다.</li>';
     return `<section style="margin:28px 0"><h2 style="font-size:18px;color:#1a1c20;border-bottom:1px solid #e2e8f0;padding-bottom:8px">${label} <span style="color:#626873;font-size:13px">${selected.length}건</span></h2><ul style="padding-left:20px">${rows}</ul></section>`;
   }).join('');
-  const subject = `[환경법규 알림] ${from}~${to} 법령·고시 변경사항 ${items.length}건`;
-  const safeIntroText = String(introText || '').trim() || '기후에너지환경부 소관 최근 7일 법령·고시 변경사항을 구분하여 발송합니다.';
+  const subject = `[환경법규 알림] ${from}~${to} 법령·행정규칙 변경사항 ${items.length}건`;
+  const safeIntroText = String(introText || '').trim() || '기후에너지환경부 소관 최근 법령·행정규칙 변경사항을 구분하여 발송합니다.';
   const html = `<!doctype html><html lang="ko"><body style="margin:0;background:#f8fafc;font-family:Arial,'Noto Sans KR',sans-serif;color:#1a1c20"><div style="max-width:720px;margin:0 auto;padding:32px 20px"><div style="background:#003874;color:white;padding:24px;border-radius:10px 10px 0 0"><h1 style="margin:0;font-size:24px">${escapeMailHtml(MAIL_FROM_NAME)}</h1><p style="margin:8px 0 0;color:#d6e3ff">기후에너지환경부 소관 최근 7일 변경사항</p></div><main style="background:white;border:1px solid #e2e8f0;border-top:0;padding:24px;border-radius:0 0 10px 10px"><p>${escapeMailHtml(safeIntroText).replace(/\r?\n/g, '<br>')}</p><p><strong>조회기간</strong> ${from} ~ ${to}<br><strong>전체</strong> ${items.length}건</p>${sections}<p style="margin-top:32px;color:#737782;font-size:12px">본 메일은 국가법령정보와 기후에너지환경부 공식 예고 목록을 기준으로 생성되었습니다. 정확한 내용은 각 원문 링크에서 확인하세요.</p></main></div></body></html>`;
   const text = `${MAIL_FROM_NAME}\n${safeIntroText}\n조회기간: ${from} ~ ${to}\n전체 ${items.length}건\n\n${groups.map(([key, label]) => `${label}\n${items.filter((item) => item.group === key).map((item) => `- ${item.title} (${item.status}, ${item.changedAt})${item.keywords?.length ? `\n  키워드: ${item.keywords.slice(0, 3).join(', ')}` : ''}\n  원문 링크: ${item.url}${['revisedLaw', 'revisedNotice'].includes(item.group) && item.comparisonUrl ? `\n  신구법 비교 링크: ${item.comparisonUrl}` : ''}`).join('\n') || '- 해당 기간 변경사항 없음'}`).join('\n\n')}`;
   return { subject, html, text };
@@ -362,6 +625,7 @@ async function sendChangesMail(recipients, introText, listedItems) {
   const from = displayDate(kstDate(-6));
   const to = displayDate(kstDate());
   const content = buildMailContent(result.items, from, to, introText);
+  const pptAttachment = await buildPptSummary(result.items, from, to);
   const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: { user: MAIL_USER, pass: MAIL_APP_PASSWORD.replace(/\s+/g, '') }
@@ -372,7 +636,12 @@ async function sendChangesMail(recipients, introText, listedItems) {
     bcc: recipients,
     subject: content.subject,
     text: content.text,
-    html: content.html
+    html: content.html,
+    attachments: [{
+      filename: `법규_개정_요약_${kstDate()}.pptx`,
+      content: pptAttachment,
+      contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+    }]
   });
   return { messageId: info.messageId, accepted: info.accepted || [], rejected: info.rejected || [] };
 }
@@ -423,6 +692,25 @@ async function handler(req, res) {
       sendJson(res, 200, { agency: AGENCY, from: displayDate(kstDate(-6)), to: displayDate(kstDate()), count: result.items.length, items: result.items, warnings: result.sourceErrors });
     } catch (error) {
       sendJson(res, 502, { error: error.name === 'AbortError' ? '국가법령정보 API 요청 시간이 초과되었습니다.' : error.message });
+    }
+    return;
+  }
+  if (requestUrl.pathname === '/api/ppt-summary' && req.method === 'GET') {
+    try {
+      const result = await getRecentChanges();
+      const from = displayDate(kstDate(-6));
+      const to = displayDate(kstDate());
+      const file = await buildPptSummary(result.items, from, to);
+      const filename = `법규_개정_요약_${kstDate()}.pptx`;
+      res.writeHead(200, {
+        'content-type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
+        'content-length': file.length,
+        'cache-control': 'no-store'
+      });
+      res.end(file);
+    } catch (error) {
+      sendJson(res, 500, { error: `PPT 생성에 실패했습니다: ${error.message}` });
     }
     return;
   }
