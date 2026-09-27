@@ -5,7 +5,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const nodemailer = require('nodemailer');
-const PptxGenJS = require(process.env.PPTXGENJS_PATH || 'C:\\Users\\jojow\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\node_modules\\pptxgenjs');
+const PptxGenJS = require('pptxgenjs');
+const { Redis } = require('@upstash/redis');
 
 const localEnvPath = path.join(__dirname, '.env');
 if (fs.existsSync(localEnvPath)) {
@@ -30,8 +31,23 @@ const MAIL_USER = process.env.MAIL_USER || '';
 const MAIL_APP_PASSWORD = process.env.MAIL_APP_PASSWORD || '';
 const RECIPIENTS_FILE = path.join(__dirname, 'recipients.json');
 const AUTH_FILE = path.join(__dirname, 'auth.json');
+// 로컬 개발 환경에만 있는 PPT 후처리 도구. 존재할 때만 선택적으로 사용하고, 없으면(Vercel 등) 건너뛴다.
 const ARTIFACT_TOOL_MODULE = 'C:\\Users\\jojow\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\node_modules\\@oai\\artifact-tool\\dist\\artifact_tool.mjs';
 const LAW_REQUEST_TIMEOUT_MS = 30000;
+
+// Vercel 등 서버리스 환경은 배포 폴더가 읽기 전용이고 함수 인스턴스마다 메모리도 따로 놀기 때문에,
+// 로컬 파일/메모리로는 비밀번호·수신자·세션이 지속되지 않는다. Upstash Redis(Vercel의 KV 마켓플레이스
+// 연동 시 자동 주입되는 KV_REST_API_* 환경변수, 또는 직접 연결한 UPSTASH_REDIS_REST_* 환경변수)가
+// 설정되어 있으면 그쪽을 쓰고, 없으면(로컬 개발) 기존 파일/메모리 방식으로 동작한다.
+let redisClient;
+function getRedis() {
+  if (redisClient === undefined) {
+    const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+    const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+    redisClient = url && token ? new Redis({ url, token }) : null;
+  }
+  return redisClient;
+}
 
 // law.go.kr / mcee.go.kr는 동시 요청이 몰리면 응답이 급격히 느려지므로,
 // 전체 요청을 소수만 동시에 흘려보내 타임아웃 발생을 줄인다.
@@ -258,6 +274,7 @@ async function buildPptSummary(items, from, to) {
 }
 
 async function normalizePptBuffer(buffer) {
+  if (!fs.existsSync(ARTIFACT_TOOL_MODULE)) return buffer;
   const id = `law-summary-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const sourcePath = path.join(os.tmpdir(), `${id}.pptx`);
   const outputPath = path.join(os.tmpdir(), `${id}-normalized.pptx`);
@@ -266,7 +283,9 @@ async function normalizePptBuffer(buffer) {
     const { FileBlob, PresentationFile } = await import(pathToFileURL(ARTIFACT_TOOL_MODULE).href);
     const presentation = await PresentationFile.importPptx(await FileBlob.load(sourcePath));
     await (await PresentationFile.exportPptx(presentation)).save(outputPath);
-    return fs.promises.readFile(outputPath);
+    return await fs.promises.readFile(outputPath);
+  } catch {
+    return buffer;
   } finally {
     await Promise.all([fs.promises.unlink(sourcePath).catch(() => {}), fs.promises.unlink(outputPath).catch(() => {})]);
   }
@@ -276,13 +295,20 @@ function normalizeRecipients(values) {
   return [...new Set(asArray(values).map((value) => String(value).trim().toLowerCase()).filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)))];
 }
 
-function readRecipients() {
+async function readRecipients() {
+  const redis = getRedis();
+  if (redis) {
+    try { return normalizeRecipients((await redis.get('recipients:list')) || []); }
+    catch { return []; }
+  }
   try { return normalizeRecipients(JSON.parse(fs.readFileSync(RECIPIENTS_FILE, 'utf8'))); }
   catch (error) { return error.code === 'ENOENT' ? [] : []; }
 }
 
-function saveRecipients(recipients) {
+async function saveRecipients(recipients) {
   const saved = normalizeRecipients(recipients);
+  const redis = getRedis();
+  if (redis) { await redis.set('recipients:list', saved); return saved; }
   const temporaryFile = `${RECIPIENTS_FILE}.tmp`;
   fs.writeFileSync(temporaryFile, `${JSON.stringify(saved, null, 2)}\n`, 'utf8');
   fs.renameSync(temporaryFile, RECIPIENTS_FILE);
@@ -290,10 +316,12 @@ function saveRecipients(recipients) {
 }
 
 // --- 접속 비밀번호 ---
-// 최초 1회만 설정 가능하고(auth.json이 이미 있으면 재설정 요청 자체를 거부), 그 이후에는
-// 앱을 통해 변경/재설정할 수 있는 경로를 아예 두지 않는다. 비밀번호를 바꾸려면 서버 파일을
-// 직접 다루는 사람(=서버에 접근 권한이 있는 관리자)만 auth.json을 지우고 다시 설정해야 한다.
-function hasPassword() {
+// 최초 1회만 설정 가능하고(이미 설정되어 있으면 재설정 요청 자체를 거부), 그 이후에는
+// 앱을 통해 변경/재설정할 수 있는 경로를 아예 두지 않는다. 비밀번호를 바꾸려면 서버(파일 또는
+// Redis)에 직접 접근할 수 있는 관리자만 저장된 값을 지우고 다시 설정해야 한다.
+async function hasPassword() {
+  const redis = getRedis();
+  if (redis) return Boolean(await redis.get('auth:config'));
   return fs.existsSync(AUTH_FILE);
 }
 
@@ -301,38 +329,66 @@ function hashPassword(password, salt) {
   return crypto.scryptSync(password, salt, 64).toString('hex');
 }
 
-function setInitialPassword(password) {
-  if (hasPassword()) throw new Error('이미 비밀번호가 설정되어 있습니다.');
+async function setInitialPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
   const hash = hashPassword(password, salt);
+  const redis = getRedis();
+  if (redis) {
+    // setnx: 이미 키가 있으면 0을 반환 — 동시에 두 요청이 들어와도 하나만 성공한다.
+    const created = await redis.setnx('auth:config', { salt, hash });
+    if (!created) throw new Error('이미 비밀번호가 설정되어 있습니다.');
+    return;
+  }
+  if (hasPasswordFileSync()) throw new Error('이미 비밀번호가 설정되어 있습니다.');
   // 'wx' 플래그로 배타적 생성: 동시에 두 요청이 들어와도 하나만 성공한다.
   fs.writeFileSync(AUTH_FILE, `${JSON.stringify({ salt, hash }, null, 2)}\n`, { flag: 'wx' });
 }
 
-function verifyPassword(password) {
-  if (!hasPassword()) return false;
-  const { salt, hash } = JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8'));
-  const candidate = Buffer.from(hashPassword(password, salt), 'hex');
-  const stored = Buffer.from(hash, 'hex');
+function hasPasswordFileSync() {
+  return fs.existsSync(AUTH_FILE);
+}
+
+async function verifyPassword(password) {
+  const redis = getRedis();
+  const config = redis ? await redis.get('auth:config') : (hasPasswordFileSync() ? JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8')) : null);
+  if (!config) return false;
+  const candidate = Buffer.from(hashPassword(password, config.salt), 'hex');
+  const stored = Buffer.from(config.hash, 'hex');
   return candidate.length === stored.length && crypto.timingSafeEqual(candidate, stored);
 }
 
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const sessions = new Map();
+const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
+const sessions = new Map(); // Redis 미설정 시(로컬 개발) 폴백
 
-function createSession() {
+async function createSession() {
   const token = crypto.randomBytes(32).toString('hex');
-  sessions.set(token, Date.now() + SESSION_TTL_MS);
+  const redis = getRedis();
+  if (redis) { await redis.setex(`session:${token}`, SESSION_TTL_SECONDS, '1'); return token; }
+  sessions.set(token, Date.now() + SESSION_TTL_SECONDS * 1000);
   return token;
 }
 
-function isValidSession(token) {
+async function isValidSession(token) {
   if (!token) return false;
+  const redis = getRedis();
+  if (redis) {
+    const exists = await redis.get(`session:${token}`);
+    if (!exists) return false;
+    await redis.expire(`session:${token}`, SESSION_TTL_SECONDS);
+    return true;
+  }
   const expiresAt = sessions.get(token);
   if (!expiresAt) return false;
   if (Date.now() > expiresAt) { sessions.delete(token); return false; }
-  sessions.set(token, Date.now() + SESSION_TTL_MS);
+  sessions.set(token, Date.now() + SESSION_TTL_SECONDS * 1000);
   return true;
+}
+
+async function destroySession(token) {
+  if (!token) return;
+  const redis = getRedis();
+  if (redis) { await redis.del(`session:${token}`); return; }
+  sessions.delete(token);
 }
 
 function parseCookies(req) {
@@ -860,18 +916,18 @@ async function handler(req, res) {
 
   if (requestUrl.pathname === '/api/auth/status' && req.method === 'GET') {
     const cookies = parseCookies(req);
-    sendJson(res, 200, { hasPassword: hasPassword(), authenticated: isValidSession(cookies.session) });
+    sendJson(res, 200, { hasPassword: await hasPassword(), authenticated: await isValidSession(cookies.session) });
     return;
   }
   if (requestUrl.pathname === '/api/auth/setup' && req.method === 'POST') {
     try {
-      if (hasPassword()) throw new Error('이미 비밀번호가 설정되어 있습니다.');
+      if (await hasPassword()) throw new Error('이미 비밀번호가 설정되어 있습니다.');
       const body = await readJson(req);
       const password = String(body.password || '');
       if (password.length < 8) throw new Error('비밀번호는 8자 이상이어야 합니다.');
       if (password.length > 200) throw new Error('비밀번호가 너무 깁니다.');
-      setInitialPassword(password);
-      setSessionCookie(res, createSession());
+      await setInitialPassword(password);
+      setSessionCookie(res, await createSession());
       sendJson(res, 200, { message: '비밀번호가 설정되었습니다.' });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
@@ -881,15 +937,15 @@ async function handler(req, res) {
   if (requestUrl.pathname === '/api/auth/login' && req.method === 'POST') {
     try {
       if (isLoginLocked(clientIp)) throw new Error('로그인 시도가 너무 많습니다. 잠시 후 다시 시도하세요.');
-      if (!hasPassword()) throw new Error('아직 비밀번호가 설정되지 않았습니다.');
+      if (!(await hasPassword())) throw new Error('아직 비밀번호가 설정되지 않았습니다.');
       const body = await readJson(req);
       const password = String(body.password || '');
-      if (!verifyPassword(password)) {
+      if (!(await verifyPassword(password))) {
         recordLoginFailure(clientIp);
         throw new Error('비밀번호가 올바르지 않습니다.');
       }
       recordLoginSuccess(clientIp);
-      setSessionCookie(res, createSession());
+      setSessionCookie(res, await createSession());
       sendJson(res, 200, { message: '로그인되었습니다.' });
     } catch (error) {
       sendJson(res, 401, { error: error.message });
@@ -898,13 +954,13 @@ async function handler(req, res) {
   }
   if (requestUrl.pathname === '/api/auth/logout' && req.method === 'POST') {
     const cookies = parseCookies(req);
-    if (cookies.session) sessions.delete(cookies.session);
+    if (cookies.session) await destroySession(cookies.session);
     clearSessionCookie(res);
     sendJson(res, 200, { message: '로그아웃되었습니다.' });
     return;
   }
 
-  const authenticated = isValidSession(parseCookies(req).session);
+  const authenticated = await isValidSession(parseCookies(req).session);
   if (!authenticated) {
     if (requestUrl.pathname === '/' || requestUrl.pathname === '/index.html') {
       const html = fs.readFileSync(path.join(__dirname, 'login.html'));
@@ -919,7 +975,7 @@ async function handler(req, res) {
   if (requestUrl.pathname === '/api/recipients') {
     try {
       if (req.method === 'GET') {
-        sendJson(res, 200, { recipients: readRecipients() });
+        sendJson(res, 200, { recipients: await readRecipients() });
         return;
       }
       if (req.method === 'PUT') {
@@ -928,7 +984,7 @@ async function handler(req, res) {
         const recipients = normalizeRecipients(requested);
         if (requested.length !== recipients.length) throw new Error('올바르지 않은 이메일 주소가 포함되어 있습니다.');
         if (recipients.length > 50) throw new Error('수신자는 최대 50명까지 저장할 수 있습니다.');
-        sendJson(res, 200, { recipients: saveRecipients(recipients) });
+        sendJson(res, 200, { recipients: await saveRecipients(recipients) });
         return;
       }
       sendJson(res, 405, { error: '허용되지 않은 요청 방식입니다.' });

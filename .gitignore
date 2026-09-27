@@ -8,3 +8,6 @@ auth.json
 .ppt-build/
 .codex-finalizer/
 output/
+
+.vercel
+.env*

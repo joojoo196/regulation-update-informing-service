@@ -8,6 +8,8 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "nodemailer": "^7.0.6"
+    "@upstash/redis": "^1.39.0",
+    "nodemailer": "^7.0.6",
+    "pptxgenjs": "^4.0.1"
   }
 }
