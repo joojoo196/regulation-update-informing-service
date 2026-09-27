@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>법규 개정 알림 서비스 · 로그인</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root{--navy:#003874;--navy2:#1a4f95;--ink:#1a1c20;--muted:#626873;--line:#e2e8f0;--bg:#f8fafc;--card:#fff}
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--ink);font:14px/1.5 Inter,Arial,sans-serif}
+    .card{width:100%;max-width:360px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:32px;margin:16px}
+    .brand{font:700 20px 'Hanken Grotesk';color:var(--navy);margin:0}
+    .sub{color:var(--muted);margin:6px 0 24px}
+    .field{display:grid;gap:7px;margin-bottom:14px}
+    .label{font-weight:600}
+    .input{width:100%;padding:11px 12px;border:1px solid #cdd4df;border-radius:7px;background:#fff;font:inherit}
+    .primary{width:100%;background:var(--navy);color:#fff;padding:12px 16px;border:0;border-radius:8px;font-weight:700;font:inherit;cursor:pointer;margin-top:8px}
+    .primary:disabled{opacity:.6;cursor:default}
+    .error{color:#ba1a1a;font-size:13px;min-height:18px;margin-top:10px}
+    .hint{color:var(--muted);font-size:12px;margin-top:4px}
+  </style>
+</head>
+<body>
+  <form class="card" id="auth-form">
+    <h1 class="brand">법규 개정 알림 서비스</h1>
+    <p class="sub" id="subtitle">확인 중…</p>
+    <div class="field">
+      <span class="label" id="password-label">비밀번호</span>
+      <input class="input" id="password" type="password" autocomplete="current-password" required minlength="1">
+    </div>
+    <div class="field" id="confirm-field" style="display:none">
+      <span class="label">비밀번호 확인</span>
+      <input class="input" id="password-confirm" type="password" autocomplete="new-password">
+      <div class="hint">8자 이상으로 설정하세요. 이후에는 이 화면에서 다시 설정할 수 없습니다.</div>
+    </div>
+    <button class="primary" id="submit-button" type="submit">확인</button>
+    <div class="error" id="error"></div>
+  </form>
+  <script>
+    const form = document.getElementById('auth-form');
+    const subtitle = document.getElementById('subtitle');
+    const confirmField = document.getElementById('confirm-field');
+    const passwordConfirm = document.getElementById('password-confirm');
+    const submitButton = document.getElementById('submit-button');
+    const errorBox = document.getElementById('error');
+    let mode = 'login';
+
+    async function init() {
+      try {
+        const response = await fetch('/api/auth/status');
+        const data = await response.json();
+        if (data.authenticated) { location.href = '/'; return; }
+        mode = data.hasPassword ? 'login' : 'setup';
+      } catch {
+        mode = 'login';
+      }
+      if (mode === 'setup') {
+        subtitle.textContent = '처음 접속입니다. 사용할 비밀번호를 설정하세요.';
+        confirmField.style.display = 'grid';
+        passwordConfirm.required = true;
+        submitButton.textContent = '비밀번호 설정';
+      } else {
+        subtitle.textContent = '비밀번호를 입력하세요.';
+        submitButton.textContent = '로그인';
+      }
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      errorBox.textContent = '';
+      const password = document.getElementById('password').value;
+      if (mode === 'setup' && password !== passwordConfirm.value) {
+        errorBox.textContent = '비밀번호 확인이 일치하지 않습니다.';
+        return;
+      }
+      submitButton.disabled = true;
+      try {
+        const response = await fetch(mode === 'setup' ? '/api/auth/setup' : '/api/auth/login', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ password })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || '요청에 실패했습니다.');
+        location.href = '/';
+      } catch (error) {
+        errorBox.textContent = error.message;
+      } finally {
+        submitButton.disabled = false;
+      }
+    });
+
+    init();
+  </script>
+</body>
+</html>

@@ -2,6 +2,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const nodemailer = require('nodemailer');
 const PptxGenJS = require(process.env.PPTXGENJS_PATH || 'C:\\Users\\jojow\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\node_modules\\pptxgenjs');
@@ -28,7 +29,25 @@ const MAIL_FROM_NAME = process.env.MAIL_FROM_NAME || '환경법령 알림서비�
 const MAIL_USER = process.env.MAIL_USER || '';
 const MAIL_APP_PASSWORD = process.env.MAIL_APP_PASSWORD || '';
 const RECIPIENTS_FILE = path.join(__dirname, 'recipients.json');
+const AUTH_FILE = path.join(__dirname, 'auth.json');
 const ARTIFACT_TOOL_MODULE = 'C:\\Users\\jojow\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\node_modules\\@oai\\artifact-tool\\dist\\artifact_tool.mjs';
+const LAW_REQUEST_TIMEOUT_MS = 30000;
+
+// law.go.kr / mcee.go.kr는 동시 요청이 몰리면 응답이 급격히 느려지므로,
+// 전체 요청을 소수만 동시에 흘려보내 타임아웃 발생을 줄인다.
+function createLimiter(limit) {
+  let active = 0;
+  const queue = [];
+  const runNext = () => {
+    if (active >= limit || !queue.length) return;
+    active += 1;
+    const { fn, resolve, reject } = queue.shift();
+    fn().then(resolve, reject).finally(() => { active -= 1; runNext(); });
+  };
+  return (fn) => new Promise((resolve, reject) => { queue.push({ fn, resolve, reject }); runNext(); });
+}
+
+const limitLawRequest = createLimiter(4);
 
 const PPT = {
   navy: '1F2E70',
@@ -49,6 +68,26 @@ function pptText(value, max = 70) {
 
 function pptDate(value) {
   return String(value || '').replace(/\./g, '.').trim() || '일정 미정';
+}
+
+// 개정이유·주요내용 전문을 자르지 않고, 한 슬라이드에 다 안 들어가면 문장 단위로 나눠 이어지는 슬라이드에 담는다.
+function chunkSummaryText(text, chunkSize = 950) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return [];
+  if (trimmed.length <= chunkSize) return [trimmed];
+  const sentences = trimmed.match(/[^.]+\.(?=\s|$)|[^.]+$/g) || [trimmed];
+  const chunks = [];
+  let current = '';
+  for (const sentence of sentences) {
+    if (current && current.length + sentence.length > chunkSize) {
+      chunks.push(current.trim());
+      current = sentence;
+    } else {
+      current += sentence;
+    }
+  }
+  if (current.trim()) chunks.push(current.trim());
+  return chunks;
 }
 
 function addPptTitle(slide, eyebrow, title, page) {
@@ -115,33 +154,70 @@ async function buildPptSummary(items, from, to) {
   }
   addPptFooter(slide, from, to);
 
-  // 3~4. 모든 변경 항목을 7건씩 나누어 표시
-  const addChangeTable = (itemsForSlide, page, chunkIndex) => {
-    const tableSlide = pptx.addSlide();
-    tableSlide.background = { color: 'FFFFFF' };
-    addPptTitle(tableSlide, 'KEY AMENDMENTS', chunkIndex ? `주요 변경 항목 ${chunkIndex + 1}` : '주요 변경 항목', page);
-    const rows = itemsForSlide.map((item) => [item.status, pptText(item.title, 38), pptDate(item.changedAt), (item.keywords || []).slice(0, 3).join(', ') || '-']);
-    tableSlide.addTable([
-      [
-        { text: '구분', options: { bold: true, color: 'FFFFFF', fill: PPT.navy, align: 'center' } },
-        { text: '법령·행정규칙명', options: { bold: true, color: 'FFFFFF', fill: PPT.navy, align: 'center' } },
-        { text: '공포·발령·예고일', options: { bold: true, color: 'FFFFFF', fill: PPT.navy, align: 'center' } },
-        { text: '핵심 키워드', options: { bold: true, color: 'FFFFFF', fill: PPT.navy, align: 'center' } }
-      ],
-      ...(rows.length ? rows : [['-', '수집된 변경사항이 없습니다.', '-', '-']])
-    ], {
-      x: 0.9, y: 1.95, w: 11.5, h: 4.3, rowH: 0.52, colW: [1.4, 4.5, 2.1, 3.5],
-      border: { type: 'solid', color: PPT.line, pt: 0.7 }, fill: 'FFFFFF', color: PPT.ink,
-      fontFace: PPT.font, fontSize: 9, margin: 0.08, valign: 'middle', autoFit: true
+  // 3~N. 항목마다 상세 슬라이드 (제목·상태·날짜 + 개정이유·주요내용 전문 + 소관부서 + 원문/비교 링크)
+  // 개정이유·주요내용 전문이 한 슬라이드에 다 안 들어가면 자르지 않고 "(계속)" 슬라이드로 이어서 담는다.
+  const groupLabel = { revisedLaw: '개정법령', revisedNotice: '개정 행정규칙', legislationNotice: '입법예고', administrativeNotice: '행정예고' };
+  const addDetailSlide = (item, page, itemNumber, chunk, chunkIndex, chunkTotal) => {
+    const detailSlide = pptx.addSlide();
+    detailSlide.background = { color: 'FFFFFF' };
+    const heading = `주요 변경 항목 ${itemNumber} · ${groupLabel[item.group] || item.category}${chunkTotal > 1 ? ` (${chunkIndex + 1}/${chunkTotal})` : ''}`;
+    addPptTitle(detailSlide, 'AMENDMENT DETAIL', heading, page);
+
+    detailSlide.addShape(pptx.ShapeType.roundRect, { x: 0.9, y: 1.86, w: 1.7, h: 0.32, rectRadius: 0.16, fill: { color: PPT.navySoft }, line: { color: PPT.navySoft } });
+    detailSlide.addText(item.status || item.kind || '', { x: 0.9, y: 1.86, w: 1.7, h: 0.32, fontFace: PPT.font, fontSize: 10.5, bold: true, color: PPT.navy, align: 'center', valign: 'middle', margin: 0, fit: 'shrink' });
+    detailSlide.addText(pptText(item.title, 60), { x: 2.75, y: 1.82, w: 9.65, h: 0.4, fontFace: PPT.font, fontSize: 17, bold: true, color: PPT.ink, margin: 0, valign: 'middle', fit: 'shrink' });
+
+    // 메타 정보·키워드·링크는 첫 슬라이드에만 담아, 이어지는 슬라이드는 본문에 더 많은 공간을 준다.
+    const metaParts = chunkIndex ? [] : [
+      item.agency, item.department ? `담당 ${item.department}` : '',
+      `공포·발령·예고일 ${pptDate(item.changedAt)}`,
+      item.effectiveAt ? `시행 ${pptDate(item.effectiveAt)}` : '',
+      item.noticeEndAt ? `예고종료 ${pptDate(item.noticeEndAt)}` : '',
+      item.noticeNumber ? `문서번호 ${item.noticeNumber}` : ''
+    ].filter(Boolean);
+    if (metaParts.length) {
+      detailSlide.addText(metaParts.join('   ·   '), { x: 0.9, y: 2.26, w: 11.5, h: 0.3, fontFace: PPT.font, fontSize: 10, color: PPT.muted, margin: 0, fit: 'shrink' });
+    }
+
+    const cardTop = metaParts.length ? 2.62 : 2.2;
+    const cardBottom = 6.3;
+    detailSlide.addShape(pptx.ShapeType.roundRect, { x: 0.9, y: cardTop, w: 11.5, h: cardBottom - cardTop, rectRadius: 0.08, fill: { color: PPT.card }, line: { color: PPT.card } });
+    detailSlide.addText(chunkIndex ? '개정 이유 및 주요 내용 (이어서)' : '개정 이유 및 주요 내용', { x: 1.18, y: cardTop + 0.16, w: 6, h: 0.26, fontFace: PPT.font, fontSize: 12, bold: true, color: PPT.navy, margin: 0 });
+    detailSlide.addText(chunk || '원문에서 상세 요약을 추출하지 못했습니다. 아래 원문 링크에서 직접 확인해 주세요.', {
+      x: 1.18, y: cardTop + 0.5, w: 11.0, h: cardBottom - cardTop - 0.66, fontFace: PPT.font, fontSize: 10.5, color: PPT.ink, margin: 0, valign: 'top', fit: 'shrink', lineSpacingMultiple: 1.28
     });
-    const start = chunkIndex * 7 + 1;
-    const end = Math.min(start + itemsForSlide.length - 1, priority.length);
-    tableSlide.addText(`전체 ${priority.length}건 중 ${start}~${end}번째 항목`, { x: 0.9, y: 6.46, w: 3.2, h: 0.2, fontFace: PPT.font, fontSize: 8.5, color: PPT.muted, margin: 0 });
-    tableSlide.addText('키워드는 제정·개정 이유와 제목을 바탕으로 대상, 지원내용, 규제변화 중심으로 추출했습니다.', { x: 4.1, y: 6.46, w: 7.6, h: 0.2, fontFace: PPT.font, fontSize: 8.5, color: PPT.muted, margin: 0, align: 'right' });
-    addPptFooter(tableSlide, from, to);
+
+    if (!chunkIndex) {
+      const keywords = (item.keywords || []).slice(0, 4);
+      keywords.forEach((keyword, keywordIndex) => {
+        const x = 0.9 + keywordIndex * 1.95;
+        detailSlide.addShape(pptx.ShapeType.roundRect, { x, y: 6.42, w: 1.8, h: 0.32, rectRadius: 0.16, fill: { color: PPT.navySoft }, line: { color: PPT.navySoft } });
+        detailSlide.addText(pptText(keyword, 11), { x, y: 6.42, w: 1.8, h: 0.32, fontFace: PPT.font, fontSize: 9, bold: true, color: PPT.navy, align: 'center', valign: 'middle', margin: 0, fit: 'shrink' });
+      });
+
+      const linkParts = [`원문 ${item.url}`, item.comparisonUrl ? `신구법 비교 ${item.comparisonUrl}` : ''].filter(Boolean);
+      detailSlide.addText(linkParts.join('   ·   '), { x: 0.9, y: 6.8, w: 11.5, h: 0.18, fontFace: PPT.font, fontSize: 7.5, color: PPT.muted, margin: 0, fit: 'shrink' });
+    }
+
+    addPptFooter(detailSlide, from, to);
   };
-  const changeChunks = priority.length ? Array.from({ length: Math.ceil(priority.length / 7) }, (_, index) => priority.slice(index * 7, index * 7 + 7)) : [[]];
-  changeChunks.forEach((chunk, index) => addChangeTable(chunk, 3 + index, index));
+  let detailSlideCount;
+  if (!priority.length) {
+    const emptySlide = pptx.addSlide();
+    emptySlide.background = { color: 'FFFFFF' };
+    addPptTitle(emptySlide, 'AMENDMENT DETAIL', '주요 변경 항목', 3);
+    emptySlide.addText('해당 기간에 수집된 변경사항이 없습니다.', { x: 0.9, y: 3.4, w: 8.3, h: 0.35, fontFace: PPT.font, fontSize: 15, color: PPT.muted, margin: 0 });
+    addPptFooter(emptySlide, from, to);
+    detailSlideCount = 1;
+  } else {
+    const detailSlides = priority.flatMap((item, index) => {
+      const chunks = chunkSummaryText(item.summary);
+      const effectiveChunks = chunks.length ? chunks : [''];
+      return effectiveChunks.map((chunk, chunkIndex) => ({ item, itemNumber: index + 1, chunk, chunkIndex, chunkTotal: effectiveChunks.length }));
+    });
+    detailSlides.forEach((spec, slideIndex) => addDetailSlide(spec.item, 3 + slideIndex, spec.itemNumber, spec.chunk, spec.chunkIndex, spec.chunkTotal));
+    detailSlideCount = detailSlides.length;
+  }
 
   // 모든 항목의 시행·예고 일정과 확인 경로. 14건마다 다음 페이지를 만듭니다.
   const scheduled = [...priority].sort((a, b) => String(a.effectiveAt || a.noticeEndAt || a.changedAt).localeCompare(String(b.effectiveAt || b.noticeEndAt || b.changedAt)));
@@ -175,7 +251,7 @@ async function buildPptSummary(items, from, to) {
     scheduleSlide.addText('공포·발령일 최근 7일, 행정예고는 예고 시작일 최근 7일 또는 미래 항목', { x: 9.83, y: 4.85, w: 2.2, h: 0.8, fontFace: PPT.font, fontSize: 8.5, color: PPT.muted, margin: 0.02, fit: 'shrink' });
     addPptFooter(scheduleSlide, from, to);
   };
-  scheduleChunks.forEach((chunk, index) => addScheduleSlide(chunk, 3 + changeChunks.length + index, index));
+  scheduleChunks.forEach((chunk, index) => addScheduleSlide(chunk, 3 + detailSlideCount + index, index));
 
   const generated = await pptx.write('nodebuffer');
   return normalizePptBuffer(generated);
@@ -213,6 +289,90 @@ function saveRecipients(recipients) {
   return saved;
 }
 
+// --- 접속 비밀번호 ---
+// 최초 1회만 설정 가능하고(auth.json이 이미 있으면 재설정 요청 자체를 거부), 그 이후에는
+// 앱을 통해 변경/재설정할 수 있는 경로를 아예 두지 않는다. 비밀번호를 바꾸려면 서버 파일을
+// 직접 다루는 사람(=서버에 접근 권한이 있는 관리자)만 auth.json을 지우고 다시 설정해야 한다.
+function hasPassword() {
+  return fs.existsSync(AUTH_FILE);
+}
+
+function hashPassword(password, salt) {
+  return crypto.scryptSync(password, salt, 64).toString('hex');
+}
+
+function setInitialPassword(password) {
+  if (hasPassword()) throw new Error('이미 비밀번호가 설정되어 있습니다.');
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = hashPassword(password, salt);
+  // 'wx' 플래그로 배타적 생성: 동시에 두 요청이 들어와도 하나만 성공한다.
+  fs.writeFileSync(AUTH_FILE, `${JSON.stringify({ salt, hash }, null, 2)}\n`, { flag: 'wx' });
+}
+
+function verifyPassword(password) {
+  if (!hasPassword()) return false;
+  const { salt, hash } = JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8'));
+  const candidate = Buffer.from(hashPassword(password, salt), 'hex');
+  const stored = Buffer.from(hash, 'hex');
+  return candidate.length === stored.length && crypto.timingSafeEqual(candidate, stored);
+}
+
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const sessions = new Map();
+
+function createSession() {
+  const token = crypto.randomBytes(32).toString('hex');
+  sessions.set(token, Date.now() + SESSION_TTL_MS);
+  return token;
+}
+
+function isValidSession(token) {
+  if (!token) return false;
+  const expiresAt = sessions.get(token);
+  if (!expiresAt) return false;
+  if (Date.now() > expiresAt) { sessions.delete(token); return false; }
+  sessions.set(token, Date.now() + SESSION_TTL_MS);
+  return true;
+}
+
+function parseCookies(req) {
+  const header = req.headers.cookie || '';
+  return Object.fromEntries(header.split(';').map((part) => part.trim()).filter(Boolean).map((part) => {
+    const index = part.indexOf('=');
+    return index === -1 ? [part, ''] : [part.slice(0, index), decodeURIComponent(part.slice(index + 1))];
+  }));
+}
+
+function setSessionCookie(res, token) {
+  // Max-Age를 주지 않는 세션 쿠키: 브라우저(창)를 완전히 닫으면 사라져서, 다시 열 때마다 비밀번호를 다시 묻는다.
+  res.setHeader('Set-Cookie', `session=${token}; HttpOnly; Path=/; SameSite=Strict`);
+}
+
+function clearSessionCookie(res) {
+  res.setHeader('Set-Cookie', 'session=; HttpOnly; Path=/; Max-Age=0; SameSite=Strict');
+}
+
+// 로그인 실패가 반복되면 잠시 잠가 무차별 대입 시도를 늦춘다.
+const LOGIN_MAX_ATTEMPTS = 10;
+const LOGIN_LOCKOUT_MS = 5 * 60 * 1000;
+const loginAttempts = new Map();
+
+function isLoginLocked(ip) {
+  const entry = loginAttempts.get(ip);
+  return Boolean(entry && entry.lockedUntil && Date.now() < entry.lockedUntil);
+}
+
+function recordLoginFailure(ip) {
+  const entry = loginAttempts.get(ip) || { count: 0, lockedUntil: 0 };
+  entry.count += 1;
+  if (entry.count >= LOGIN_MAX_ATTEMPTS) { entry.lockedUntil = Date.now() + LOGIN_LOCKOUT_MS; entry.count = 0; }
+  loginAttempts.set(ip, entry);
+}
+
+function recordLoginSuccess(ip) {
+  loginAttempts.delete(ip);
+}
+
 function kstDate(offsetDays = 0) {
   const now = new Date(Date.now() + 9 * 60 * 60 * 1000);
   now.setUTCDate(now.getUTCDate() + offsetDays);
@@ -230,13 +390,17 @@ function asArray(value) {
 }
 
 function decodeHtml(value) {
-  return String(value || '')
+  let text = String(value || '')
     .replace(/<!--[^]*?-->/g, '')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;|&#160;/gi, ' ')
     .replace(/&amp;/gi, '&').replace(/&quot;/gi, '"').replace(/&#39;/gi, "'")
-    .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
-    .replace(/\s+/g, ' ').trim();
+    .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>');
+  // 정부 사이트 원문에 이중 이스케이프된 특수문자 엔티티가 그대로 남는 경우가 있어 한 번 더 정리한다.
+  const namedEntities = { lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', middot: '·', hellip: '…', mdash: '—', ndash: '–', amp: '&', quot: '"', apos: "'", lt: '<', gt: '>' };
+  text = text.replace(/&([a-zA-Z]+);/g, (match, name) => namedEntities[name.toLowerCase()] ?? match)
+    .replace(/&#(\d+);/g, (match, code) => String.fromCharCode(Number(code)));
+  return text.replace(/\s+/g, ' ').trim();
 }
 
 function dateKey(value) {
@@ -268,13 +432,15 @@ function anchorFromCell(cell, baseUrl) {
 }
 
 async function requestHtml(url) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
-  try {
-    const response = await fetch(url, { signal: controller.signal, headers: { accept: 'text/html', 'user-agent': 'Environment-Law-Monitor/1.0' } });
-    if (!response.ok) throw new Error(`공식 목록 HTTP ${response.status}`);
-    return await response.text();
-  } finally { clearTimeout(timer); }
+  return limitLawRequest(async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), LAW_REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, { signal: controller.signal, headers: { accept: 'text/html', 'user-agent': 'Environment-Law-Monitor/1.0' } });
+      if (!response.ok) throw new Error(`공식 목록 HTTP ${response.status}`);
+      return await response.text();
+    } finally { clearTimeout(timer); }
+  });
 }
 
 function officialLawFromRow(cells, baseUrl) {
@@ -324,10 +490,10 @@ async function fetchMceeRecentLawListings(from, today) {
   }
   const filtered = items.filter((item) => item.agency.includes(AGENCY) && dateKey(item.changedAt) >= from && dateKey(item.changedAt) <= today);
   const unique = new Map(filtered.map((item) => [item.id, item]));
-  return Promise.all([...unique.values()].map(async (item) => ({
-    ...item,
-    keywords: await getReasonKeywords('law', { MST: item.id.replace(/^law-/, '') }, item.title)
-  })));
+  return Promise.all([...unique.values()].map(async (item) => {
+    const detail = await getReasonDetail('law', { MST: item.id.replace(/^law-/, '') }, item.title);
+    return { ...item, keywords: detail.keywords, summary: detail.summary };
+  }));
 }
 
 async function fetchOfficialLawListings(from, today) {
@@ -336,15 +502,15 @@ async function fetchOfficialLawListings(from, today) {
   const items = pages.flatMap(({ url, html }) => rowsFromHtml(html).map((cells) => officialLawFromRow(cells, url)).filter(Boolean));
   const filtered = items.filter((item) => item.agency.includes(AGENCY) && dateKey(item.changedAt) >= from && dateKey(item.changedAt) <= today);
   const unique = new Map(filtered.map((item) => [item.id, item]));
-  return Promise.all([...unique.values()].map(async (item) => ({
-    ...item,
-    keywords: await getReasonKeywords('law', { MST: item.id.replace(/^law-/, '') }, item.title)
-  })));
+  return Promise.all([...unique.values()].map(async (item) => {
+    const detail = await getReasonDetail('law', { MST: item.id.replace(/^law-/, '') }, item.title);
+    return { ...item, keywords: detail.keywords, summary: detail.summary };
+  }));
 }
 
 async function fetchLegislationNotices(from, to) {
   const html = await requestHtml(LEGISLATION_NOTICE_URL);
-  return rowsFromHtml(html).filter((cells) => cells.length >= 5).map((cells) => {
+  const items = rowsFromHtml(html).filter((cells) => cells.length >= 5).map((cells) => {
     const anchor = anchorFromCell(cells[1], LEGISLATION_NOTICE_URL);
     const published = dateKey(decodeHtml(cells[2]));
     return {
@@ -354,11 +520,15 @@ async function fetchLegislationNotices(from, to) {
       effectiveAt: '', kind: '입법예고', noticeNumber: decodeHtml(cells[3]), url: anchor.url
     };
   }).filter((item) => item.agency.includes(AGENCY) && dateKey(item.changedAt) >= from && dateKey(item.changedAt) <= to);
+  return Promise.all(items.map(async (item) => {
+    const detail = await getNoticeDetail(item.url, item.title);
+    return { ...item, keywords: detail.keywords, summary: detail.summary };
+  }));
 }
 
 async function fetchAdministrativeNotices(from) {
   const html = await requestHtml(ADMIN_NOTICE_URL);
-  return rowsFromHtml(html).filter((cells) => cells.length >= 7).map((cells) => {
+  const items = rowsFromHtml(html).filter((cells) => cells.length >= 7).map((cells) => {
     const anchor = anchorFromCell(cells[1], ADMIN_NOTICE_URL);
     const start = dateKey(decodeHtml(cells[3]));
     const end = dateKey(decodeHtml(cells[4]));
@@ -371,41 +541,49 @@ async function fetchAdministrativeNotices(from) {
   // 예고 시작일이 최근 7일 안이거나 미래인 자료를 포함한다.
   // 이미 시작한 지 7일이 지난 예고는 목록에서 제외한다.
   }).filter((item) => dateKey(item.changedAt) >= from);
+  return Promise.all(items.map(async (item) => {
+    const detail = await getNoticeDetail(item.url, item.title);
+    return { ...item, keywords: detail.keywords, summary: detail.summary };
+  }));
 }
 
 async function requestApi(params) {
   const url = new URL(LAW_API);
   Object.entries({ OC: API_KEY, type: 'JSON', ...params }).forEach(([key, value]) => url.searchParams.set(key, value));
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
-  try {
-    const response = await fetch(url, { signal: controller.signal, headers: { accept: 'application/json' } });
-    const text = await response.text();
-    if (!response.ok) throw new Error(`국가법령정보 API HTTP ${response.status}`);
-    let data;
-    try { data = JSON.parse(text); } catch { throw new Error('국가법령정보 API가 JSON이 아닌 응답을 반환했습니다.'); }
-    const root = data.LawSearch || data.AdmRulSearch;
-    if (!root) throw new Error(data.resultMsg || '국가법령정보 API 응답 형식을 확인할 수 없습니다.');
-    if (root.resultCode && root.resultCode !== '00') throw new Error(root.resultMsg || `API 오류 ${root.resultCode}`);
-    return root;
-  } finally {
-    clearTimeout(timer);
-  }
+  return limitLawRequest(async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), LAW_REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, { signal: controller.signal, headers: { accept: 'application/json' } });
+      const text = await response.text();
+      if (!response.ok) throw new Error(`국가법령정보 API HTTP ${response.status}`);
+      let data;
+      try { data = JSON.parse(text); } catch { throw new Error('국가법령정보 API가 JSON이 아닌 응답을 반환했습니다.'); }
+      const root = data.LawSearch || data.AdmRulSearch;
+      if (!root) throw new Error(data.resultMsg || '국가법령정보 API 응답 형식을 확인할 수 없습니다.');
+      if (root.resultCode && root.resultCode !== '00') throw new Error(root.resultMsg || `API 오류 ${root.resultCode}`);
+      return root;
+    } finally {
+      clearTimeout(timer);
+    }
+  });
 }
 
 async function requestLawService(params) {
   const url = new URL(LAW_SERVICE_API);
   Object.entries({ OC: API_KEY, type: 'JSON', ...params }).forEach(([key, value]) => url.searchParams.set(key, value));
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
-  try {
-    const response = await fetch(url, { signal: controller.signal, headers: { accept: 'application/json' } });
-    const text = await response.text();
-    if (!response.ok) throw new Error(`국가법령정보 API HTTP ${response.status}`);
-    try { return JSON.parse(text); } catch { throw new Error('국가법령정보 API가 JSON이 아닌 응답을 반환했습니다.'); }
-  } finally {
-    clearTimeout(timer);
-  }
+  return limitLawRequest(async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), LAW_REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, { signal: controller.signal, headers: { accept: 'application/json' } });
+      const text = await response.text();
+      if (!response.ok) throw new Error(`국가법령정보 API HTTP ${response.status}`);
+      try { return JSON.parse(text); } catch { throw new Error('국가법령정보 API가 JSON이 아닌 응답을 반환했습니다.'); }
+    } finally {
+      clearTimeout(timer);
+    }
+  });
 }
 
 function findField(value, fieldName) {
@@ -494,11 +672,31 @@ function extractReasonKeywords(reason, title = '') {
   return selected.slice(0, 3);
 }
 
-async function getReasonKeywords(target, identifiers, title = '') {
+function summarizeReasonText(raw) {
+  return decodeHtml(raw).replace(/^[○ㅇ●\-\s]+/, '').trim();
+}
+
+async function getReasonDetail(target, identifiers, title = '') {
   try {
     const data = await requestLawService({ target, ...identifiers });
-    return extractReasonKeywords(findField(data, '제개정이유내용'), title);
-  } catch { return []; }
+    const raw = findField(data, '제개정이유내용');
+    return { keywords: extractReasonKeywords(raw, title), summary: summarizeReasonText(raw) };
+  } catch { return { keywords: [], summary: '' }; }
+}
+
+// 입법예고·행정예고는 국가법령정보 API 대상이 아니라, 공고 상세 페이지를 직접 읽어
+// "개정이유" ~ "주요내용" 구간 텍스트를 요약·키워드 추출에 사용한다.
+async function getNoticeDetail(url, title = '') {
+  try {
+    const html = await requestHtml(url);
+    const text = decodeHtml(html);
+    const start = text.search(/\d\s*\.\s*(개정\s*이유|제정\s*이유|제안\s*이유|개정\s*취지)/);
+    if (start === -1) return { keywords: [], summary: '' };
+    const rest = text.slice(start);
+    const end = rest.search(/\d\s*\.\s*(의견제출|시행일|부칙|문의처|담당자)/);
+    const section = (end === -1 ? rest : rest.slice(0, end)).replace(/^\d\s*\.\s*(개정|제정|제안)\s*(이유|취지)\s*/, '');
+    return { keywords: extractReasonKeywords(section, title), summary: summarizeReasonText(section) };
+  } catch { return { keywords: [], summary: '' }; }
 }
 
 async function fetchAll(params, listKey) {
@@ -541,37 +739,45 @@ async function getRecentChanges() {
     fetchAdministrativeNotices(dateKeys.at(-1)).catch((error) => { sourceErrors.push(`행정예고: ${error.message}`); return []; })
   ]);
 
-  const laws = await Promise.all(recentLaws.filter((item) => isRelevant(item) && isRecentPublication(item, '공포일자', dateKeys.at(-1), today)).map(async (item) => ({
-    id: `law-${item['법령일련번호']}`,
-    group: 'revisedLaw',
-    category: '법령',
-    status: item['제개정구분명'],
-    title: item['법령명한글'],
-    agency: item['소관부처명'],
-    changedAt: displayDate(item['공포일자']),
-    announcedAt: displayDate(item['공포일자']),
-    effectiveAt: displayDate(item['시행일자']),
-    kind: item['법령구분명'],
-    keywords: await getReasonKeywords('law', { MST: item['법령일련번호'] }, item['법령명한글']),
-    comparisonUrl: `https://www.law.go.kr/LSW/lsOldAndNew.do?lsiSeq=${encodeURIComponent(item['법령일련번호'])}`,
-    url: `https://www.law.go.kr/법령/${encodeURIComponent(item['법령명한글'] || '')}`
-  })));
+  const laws = await Promise.all(recentLaws.filter((item) => isRelevant(item) && isRecentPublication(item, '공포일자', dateKeys.at(-1), today)).map(async (item) => {
+    const detail = await getReasonDetail('law', { MST: item['법령일련번호'] }, item['법령명한글']);
+    return {
+      id: `law-${item['법령일련번호']}`,
+      group: 'revisedLaw',
+      category: '법령',
+      status: item['제개정구분명'],
+      title: item['법령명한글'],
+      agency: item['소관부처명'],
+      changedAt: displayDate(item['공포일자']),
+      announcedAt: displayDate(item['공포일자']),
+      effectiveAt: displayDate(item['시행일자']),
+      kind: item['법령구분명'],
+      keywords: detail.keywords,
+      summary: detail.summary,
+      comparisonUrl: `https://www.law.go.kr/LSW/lsOldAndNew.do?lsiSeq=${encodeURIComponent(item['법령일련번호'])}`,
+      url: `https://www.law.go.kr/법령/${encodeURIComponent(item['법령명한글'] || '')}`
+    };
+  }));
 
-  const rules = await Promise.all(adminRules.filter((item) => isRelatedAdministrativeRule(item) && isRecentPublication(item, '발령일자', dateKeys.at(-1), today)).map(async (item) => ({
-    id: `rule-${item['행정규칙일련번호']}`,
-    group: 'revisedNotice',
-    category: '행정규칙',
-    status: item['제개정구분명'],
-    title: item['행정규칙명'],
-    agency: item['소관부처명'],
-    changedAt: displayDate(item['발령일자']),
-    announcedAt: displayDate(item['발령일자']),
-    effectiveAt: displayDate(item['시행일자']),
-    kind: item['행정규칙종류'],
-    keywords: await getReasonKeywords('admrul', { ID: item['행정규칙일련번호'] }, item['행정규칙명']),
-    comparisonUrl: `https://www.law.go.kr/LSW/admRulOldAndNew.do?admRulSeq=${encodeURIComponent(item['행정규칙일련번호'])}`,
-    url: `https://www.law.go.kr/행정규칙/${encodeURIComponent(item['행정규칙명'] || '')}`
-  })));
+  const rules = await Promise.all(adminRules.filter((item) => isRelatedAdministrativeRule(item) && isRecentPublication(item, '발령일자', dateKeys.at(-1), today)).map(async (item) => {
+    const detail = await getReasonDetail('admrul', { ID: item['행정규칙일련번호'] }, item['행정규칙명']);
+    return {
+      id: `rule-${item['행정규칙일련번호']}`,
+      group: 'revisedNotice',
+      category: '행정규칙',
+      status: item['제개정구분명'],
+      title: item['행정규칙명'],
+      agency: item['소관부처명'],
+      changedAt: displayDate(item['발령일자']),
+      announcedAt: displayDate(item['발령일자']),
+      effectiveAt: displayDate(item['시행일자']),
+      kind: item['행정규칙종류'],
+      keywords: detail.keywords,
+      summary: detail.summary,
+      comparisonUrl: `https://www.law.go.kr/LSW/admRulOldAndNew.do?admRulSeq=${encodeURIComponent(item['행정규칙일련번호'])}`,
+      url: `https://www.law.go.kr/행정규칙/${encodeURIComponent(item['행정규칙명'] || '')}`
+    };
+  }));
 
   // 환경부 최근 제·개정법령 목록을 마지막에 병합해, 동일 법령은 환경부 목록 정보를 우선한다.
   const unique = new Map([...legislationResult, ...officialLaws, ...laws, ...mceeLaws, ...administrativeResult, ...rules].map((item) => [item.id, item]));
@@ -587,7 +793,7 @@ function escapeMailHtml(value) {
   return String(value || '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 }
 
-function buildMailContent(items, from, to, introText = '기후에너지환경부 소관 최근 법령·행정규칙 변경사항을 구분하여 발송합니다.') {
+function buildMailContent(items, from, to, introText = '기후에너지환경부 소관 최근 7일 법령·고시 변경사항을 구분하여 주성철 과장이 발송하였습니다.\n(스팸메일 아님)') {
   const groups = [
     ['legislationNotice', '변경 법령 · 입법예고'],
     ['revisedLaw', '변경 법령 · 개정법령'],
@@ -600,7 +806,7 @@ function buildMailContent(items, from, to, introText = '기후에너지환경부
     return `<section style="margin:28px 0"><h2 style="font-size:18px;color:#1a1c20;border-bottom:1px solid #e2e8f0;padding-bottom:8px">${label} <span style="color:#626873;font-size:13px">${selected.length}건</span></h2><ul style="padding-left:20px">${rows}</ul></section>`;
   }).join('');
   const subject = `[환경법규 알림] ${from}~${to} 법령·행정규칙 변경사항 ${items.length}건`;
-  const safeIntroText = String(introText || '').trim() || '기후에너지환경부 소관 최근 법령·행정규칙 변경사항을 구분하여 발송합니다.';
+  const safeIntroText = String(introText || '').trim() || '기후에너지환경부 소관 최근 7일 법령·고시 변경사항을 구분하여 주성철 과장이 발송하였습니다.\n(스팸메일 아님)';
   const html = `<!doctype html><html lang="ko"><body style="margin:0;background:#f8fafc;font-family:Arial,'Noto Sans KR',sans-serif;color:#1a1c20"><div style="max-width:720px;margin:0 auto;padding:32px 20px"><div style="background:#003874;color:white;padding:24px;border-radius:10px 10px 0 0"><h1 style="margin:0;font-size:24px">${escapeMailHtml(MAIL_FROM_NAME)}</h1><p style="margin:8px 0 0;color:#d6e3ff">기후에너지환경부 소관 최근 7일 변경사항</p></div><main style="background:white;border:1px solid #e2e8f0;border-top:0;padding:24px;border-radius:0 0 10px 10px"><p>${escapeMailHtml(safeIntroText).replace(/\r?\n/g, '<br>')}</p><p><strong>조회기간</strong> ${from} ~ ${to}<br><strong>전체</strong> ${items.length}건</p>${sections}<p style="margin-top:32px;color:#737782;font-size:12px">본 메일은 국가법령정보와 기후에너지환경부 공식 예고 목록을 기준으로 생성되었습니다. 정확한 내용은 각 원문 링크에서 확인하세요.</p></main></div></body></html>`;
   const text = `${MAIL_FROM_NAME}\n${safeIntroText}\n조회기간: ${from} ~ ${to}\n전체 ${items.length}건\n\n${groups.map(([key, label]) => `${label}\n${items.filter((item) => item.group === key).map((item) => `- ${item.title} (${item.status}, ${item.changedAt})${item.keywords?.length ? `\n  키워드: ${item.keywords.slice(0, 3).join(', ')}` : ''}\n  원문 링크: ${item.url}${['revisedLaw', 'revisedNotice'].includes(item.group) && item.comparisonUrl ? `\n  신구법 비교 링크: ${item.comparisonUrl}` : ''}`).join('\n') || '- 해당 기간 변경사항 없음'}`).join('\n\n')}`;
   return { subject, html, text };
@@ -609,9 +815,11 @@ function buildMailContent(items, from, to, introText = '기후에너지환경부
 async function readJson(req) {
   const chunks = [];
   let size = 0;
+  // 메일 발송 요청은 화면에서 불러온 변경사항 목록(항목별 개정이유 전문 포함)을 통째로 함께 보내므로
+  // 넉넉하게 잡는다. 32KB였던 이전 한도는 요약 전문이 길어지면서 정상 요청도 막아버렸다.
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 32 * 1024) throw new Error('요청 데이터가 너무 큽니다.');
+    if (size > 2 * 1024 * 1024) throw new Error('요청 데이터가 너무 큽니다.');
     chunks.push(chunk);
   }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); }
@@ -648,6 +856,66 @@ async function sendChangesMail(recipients, introText, listedItems) {
 
 async function handler(req, res) {
   const requestUrl = new URL(req.url, `http://${req.headers.host}`);
+  const clientIp = req.socket.remoteAddress || 'unknown';
+
+  if (requestUrl.pathname === '/api/auth/status' && req.method === 'GET') {
+    const cookies = parseCookies(req);
+    sendJson(res, 200, { hasPassword: hasPassword(), authenticated: isValidSession(cookies.session) });
+    return;
+  }
+  if (requestUrl.pathname === '/api/auth/setup' && req.method === 'POST') {
+    try {
+      if (hasPassword()) throw new Error('이미 비밀번호가 설정되어 있습니다.');
+      const body = await readJson(req);
+      const password = String(body.password || '');
+      if (password.length < 8) throw new Error('비밀번호는 8자 이상이어야 합니다.');
+      if (password.length > 200) throw new Error('비밀번호가 너무 깁니다.');
+      setInitialPassword(password);
+      setSessionCookie(res, createSession());
+      sendJson(res, 200, { message: '비밀번호가 설정되었습니다.' });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+  if (requestUrl.pathname === '/api/auth/login' && req.method === 'POST') {
+    try {
+      if (isLoginLocked(clientIp)) throw new Error('로그인 시도가 너무 많습니다. 잠시 후 다시 시도하세요.');
+      if (!hasPassword()) throw new Error('아직 비밀번호가 설정되지 않았습니다.');
+      const body = await readJson(req);
+      const password = String(body.password || '');
+      if (!verifyPassword(password)) {
+        recordLoginFailure(clientIp);
+        throw new Error('비밀번호가 올바르지 않습니다.');
+      }
+      recordLoginSuccess(clientIp);
+      setSessionCookie(res, createSession());
+      sendJson(res, 200, { message: '로그인되었습니다.' });
+    } catch (error) {
+      sendJson(res, 401, { error: error.message });
+    }
+    return;
+  }
+  if (requestUrl.pathname === '/api/auth/logout' && req.method === 'POST') {
+    const cookies = parseCookies(req);
+    if (cookies.session) sessions.delete(cookies.session);
+    clearSessionCookie(res);
+    sendJson(res, 200, { message: '로그아웃되었습니다.' });
+    return;
+  }
+
+  const authenticated = isValidSession(parseCookies(req).session);
+  if (!authenticated) {
+    if (requestUrl.pathname === '/' || requestUrl.pathname === '/index.html') {
+      const html = fs.readFileSync(path.join(__dirname, 'login.html'));
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(html);
+      return;
+    }
+    sendJson(res, 401, { error: '로그인이 필요합니다.' });
+    return;
+  }
+
   if (requestUrl.pathname === '/api/recipients') {
     try {
       if (req.method === 'GET') {
