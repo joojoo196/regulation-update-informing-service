@@ -1,0 +1,23 @@
+# 자동 발송 트리거: 5분마다 배포 서버의 /api/cron/tick 을 호출한다.
+# 실제 발송 여부(요일·시간)는 웹 화면의 "자동 발송" 설정에 따라 서버가 판단한다.
+# 필요한 저장소 Secret: CRON_SECRET (Vercel 환경변수 CRON_SECRET과 같은 값)
+name: scheduled-mail
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Call /api/cron/tick
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_URL: https://regulation-update-informing-service.vercel.app
+        run: |
+          curl --fail-with-body -sS --max-time 540 \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${APP_URL}/api/cron/tick"

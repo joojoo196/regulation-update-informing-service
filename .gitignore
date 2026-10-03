@@ -11,3 +11,5 @@ output/
 
 .vercel
 .env*
+schedule.json
+schedule.json.tmp

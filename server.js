@@ -315,6 +315,182 @@ async function saveRecipients(recipients) {
   return saved;
 }
 
+// --- 자동 발송 일정 ---
+// 서버리스 환경에는 상주 타이머가 없으므로, 외부 스케줄러(GitHub Actions 등)가 /api/cron/tick 을
+// 주기적으로 호출하면 "가장 최근 예정 시각이 지났고 아직 발송하지 않았는지"를 확인해 발송한다.
+// 호출이 몇 분 늦어도 SCHEDULE_GRACE_MS 안이면 발송하고, 같은 회차는 잠금 키로 한 번만 발송한다.
+const SCHEDULE_FILE = path.join(__dirname, 'schedule.json');
+const SCHEDULE_GRACE_MS = 3 * 60 * 60 * 1000;
+const SCHEDULE_MAX_ATTEMPTS = 3;
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+// 배포 서버와 로컬 서버가 동시에 발송하지 않도록, 로컬 자체 타이머는 LOCAL_AUTO_SEND=true일 때만 켠다.
+const LOCAL_AUTO_SEND = require.main === module && process.env.LOCAL_AUTO_SEND === 'true';
+const WEEKDAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
+const DEFAULT_SCHEDULE = { enabled: true, day: 1, time: '07:10', introText: '', updatedAt: 0 };
+
+function normalizeSchedule(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const day = Number(source.day);
+  const time = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(source.time || '')) ? String(source.time) : DEFAULT_SCHEDULE.time;
+  return {
+    enabled: source.enabled === undefined ? DEFAULT_SCHEDULE.enabled : Boolean(source.enabled),
+    day: Number.isInteger(day) && day >= 0 && day <= 6 ? day : DEFAULT_SCHEDULE.day,
+    time,
+    introText: String(source.introText || '').slice(0, 5000),
+    updatedAt: Number(source.updatedAt) || 0
+  };
+}
+
+function readScheduleFile() {
+  try { return JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); } catch { return {}; }
+}
+
+function writeScheduleFile(data) {
+  const temporaryFile = `${SCHEDULE_FILE}.tmp`;
+  fs.writeFileSync(temporaryFile, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+  fs.renameSync(temporaryFile, SCHEDULE_FILE);
+}
+
+async function readSchedule() {
+  const redis = getRedis();
+  if (redis) return normalizeSchedule(await redis.get('schedule:config'));
+  return normalizeSchedule(readScheduleFile().config);
+}
+
+async function saveSchedule(value) {
+  const saved = normalizeSchedule({ ...value, updatedAt: Date.now() });
+  const redis = getRedis();
+  if (redis) { await redis.set('schedule:config', saved); return saved; }
+  writeScheduleFile({ ...readScheduleFile(), config: saved });
+  return saved;
+}
+
+async function readLastScheduledRun() {
+  const redis = getRedis();
+  if (redis) return (await redis.get('schedule:lastRun')) || null;
+  return readScheduleFile().lastRun || null;
+}
+
+async function saveLastScheduledRun(run) {
+  const redis = getRedis();
+  if (redis) { await redis.set('schedule:lastRun', run); return; }
+  writeScheduleFile({ ...readScheduleFile(), lastRun: run });
+}
+
+// 회차별 시도 횟수를 원자적으로 늘린다. 동시에 두 번 호출되어도 시도 번호가 겹치지 않는다.
+async function claimScheduledOccurrence(key) {
+  const redis = getRedis();
+  if (redis) {
+    const attempt = await redis.incr(`schedule:attempts:${key}`);
+    await redis.expire(`schedule:attempts:${key}`, 8 * 24 * 60 * 60);
+    return attempt;
+  }
+  const data = readScheduleFile();
+  const attempts = { ...(data.attempts || {}) };
+  attempts[key] = (attempts[key] || 0) + 1;
+  for (const old of Object.keys(attempts).sort().slice(0, -10)) delete attempts[old];
+  writeScheduleFile({ ...data, attempts });
+  return attempts[key];
+}
+
+async function markScheduledOccurrenceDone(key) {
+  const redis = getRedis();
+  if (redis) { await redis.set(`schedule:attempts:${key}`, SCHEDULE_MAX_ATTEMPTS + 100, { ex: 8 * 24 * 60 * 60 }); return; }
+  const data = readScheduleFile();
+  writeScheduleFile({ ...data, attempts: { ...(data.attempts || {}), [key]: SCHEDULE_MAX_ATTEMPTS + 100 } });
+}
+
+// 설정한 요일·시각(KST)의 회차 중 now 이전의 가장 최근 회차(UTC ms)를 구한다.
+function latestOccurrence(schedule, now = Date.now()) {
+  const [hour, minute] = schedule.time.split(':').map(Number);
+  const kstNow = new Date(now + KST_OFFSET_MS);
+  const dayDiff = (kstNow.getUTCDay() - schedule.day + 7) % 7;
+  let occurrence = Date.UTC(kstNow.getUTCFullYear(), kstNow.getUTCMonth(), kstNow.getUTCDate() - dayDiff, hour, minute) - KST_OFFSET_MS;
+  if (occurrence > now) occurrence -= 7 * 24 * 60 * 60 * 1000;
+  return occurrence;
+}
+
+function nextOccurrence(schedule, now = Date.now()) {
+  return latestOccurrence(schedule, now) + 7 * 24 * 60 * 60 * 1000;
+}
+
+function formatKst(ms) {
+  const date = new Date(ms + KST_OFFSET_MS);
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getUTCFullYear()}.${pad(date.getUTCMonth() + 1)}.${pad(date.getUTCDate())} (${WEEKDAY_LABELS[date.getUTCDay()]}) ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+}
+
+function occurrenceKey(ms) {
+  return formatKst(ms).replace(/\D/g, '');
+}
+
+async function scheduleStatus() {
+  const schedule = await readSchedule();
+  return {
+    schedule,
+    nextRunAt: schedule.enabled ? formatKst(nextOccurrence(schedule)) : null,
+    lastRun: await readLastScheduledRun(),
+    triggerConfigured: Boolean(process.env.CRON_SECRET) || LOCAL_AUTO_SEND
+  };
+}
+
+async function runScheduledSend(now = Date.now()) {
+  const schedule = await readSchedule();
+  if (!schedule.enabled) return { status: 'disabled' };
+  const occurrence = latestOccurrence(schedule, now);
+  // 설정을 저장하기 전에 이미 지난 회차는 소급해서 발송하지 않는다.
+  if (occurrence < schedule.updatedAt) return { status: 'waiting', nextRunAt: formatKst(nextOccurrence(schedule, now)) };
+  if (now - occurrence > SCHEDULE_GRACE_MS) return { status: 'waiting', nextRunAt: formatKst(nextOccurrence(schedule, now)) };
+  const key = occurrenceKey(occurrence);
+  // 발송(수집+PPT 생성)이 수 분 걸리는 동안 다음 호출이 들어와도 중복 발송되지 않도록 잠근다.
+  if (!(await acquireScheduleLock())) return { status: 'busy' };
+  try {
+    return await sendScheduledOccurrence(schedule, occurrence, key, now);
+  } finally {
+    await releaseScheduleLock();
+  }
+}
+
+let localScheduleLock = false;
+async function acquireScheduleLock() {
+  const redis = getRedis();
+  if (redis) return Boolean(await redis.set('schedule:lock', '1', { nx: true, ex: 15 * 60 }));
+  if (localScheduleLock) return false;
+  localScheduleLock = true;
+  return true;
+}
+
+async function releaseScheduleLock() {
+  const redis = getRedis();
+  if (redis) { await redis.del('schedule:lock'); return; }
+  localScheduleLock = false;
+}
+
+async function sendScheduledOccurrence(schedule, occurrence, key, now) {
+  const attempt = await claimScheduledOccurrence(key);
+  if (attempt > SCHEDULE_MAX_ATTEMPTS) return { status: 'done', occurrence: formatKst(occurrence) };
+  const recipients = await readRecipients();
+  const run = { occurrence: formatKst(occurrence), ranAt: formatKst(now), attempt, recipients: recipients.length };
+  try {
+    if (!recipients.length) throw new Error('저장된 수신자가 없습니다.');
+    const result = await sendChangesMail(recipients, schedule.introText, null);
+    await markScheduledOccurrenceDone(key);
+    Object.assign(run, { ok: true, accepted: result.accepted.length, rejected: result.rejected.length });
+  } catch (error) {
+    Object.assign(run, { ok: false, error: error.name === 'AbortError' ? '국가법령정보 API 요청 시간이 초과되었습니다.' : error.message });
+  }
+  await saveLastScheduledRun(run);
+  return { status: run.ok ? 'sent' : 'failed', ...run };
+}
+
+function isCronAuthorized(req) {
+  const secret = process.env.CRON_SECRET || '';
+  if (!secret) return false;
+  const provided = Buffer.from(String(req.headers.authorization || ''));
+  const expected = Buffer.from(`Bearer ${secret}`);
+  return provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+}
+
 // --- 접속 비밀번호 ---
 // 최초 1회만 설정 가능하고(이미 설정되어 있으면 재설정 요청 자체를 거부), 그 이후에는
 // 앱을 통해 변경/재설정할 수 있는 경로를 아예 두지 않는다. 비밀번호를 바꾸려면 서버(파일 또는
@@ -960,6 +1136,18 @@ async function handler(req, res) {
     return;
   }
 
+  // 외부 스케줄러 전용. 로그인 세션 대신 CRON_SECRET(Bearer)으로 인증한다.
+  if (requestUrl.pathname === '/api/cron/tick' && (req.method === 'GET' || req.method === 'POST')) {
+    if (!process.env.CRON_SECRET) { sendJson(res, 503, { error: 'CRON_SECRET 환경변수가 설정되지 않았습니다.' }); return; }
+    if (!isCronAuthorized(req)) { sendJson(res, 401, { error: '인증에 실패했습니다.' }); return; }
+    try {
+      sendJson(res, 200, await runScheduledSend());
+    } catch (error) {
+      sendJson(res, 500, { error: error.message });
+    }
+    return;
+  }
+
   const authenticated = await isValidSession(parseCookies(req).session);
   if (!authenticated) {
     if (requestUrl.pathname === '/' || requestUrl.pathname === '/index.html') {
@@ -985,6 +1173,28 @@ async function handler(req, res) {
         if (requested.length !== recipients.length) throw new Error('올바르지 않은 이메일 주소가 포함되어 있습니다.');
         if (recipients.length > 50) throw new Error('수신자는 최대 50명까지 저장할 수 있습니다.');
         sendJson(res, 200, { recipients: await saveRecipients(recipients) });
+        return;
+      }
+      sendJson(res, 405, { error: '허용되지 않은 요청 방식입니다.' });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+  if (requestUrl.pathname === '/api/schedule') {
+    try {
+      if (req.method === 'GET') {
+        sendJson(res, 200, await scheduleStatus());
+        return;
+      }
+      if (req.method === 'PUT') {
+        const body = await readJson(req);
+        const day = Number(body.day);
+        if (!Number.isInteger(day) || day < 0 || day > 6) throw new Error('요일을 올바르게 선택하세요.');
+        if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(body.time || ''))) throw new Error('시간을 올바르게 입력하세요.');
+        if (String(body.introText || '').length > 5000) throw new Error('메일 본문은 5,000자 이내로 입력하세요.');
+        await saveSchedule({ enabled: Boolean(body.enabled), day, time: String(body.time), introText: String(body.introText || '').trim() });
+        sendJson(res, 200, await scheduleStatus());
         return;
       }
       sendJson(res, 405, { error: '허용되지 않은 요청 방식입니다.' });
@@ -1053,4 +1263,10 @@ if (require.main === module) {
   http.createServer(handler).listen(PORT, '127.0.0.1', () => {
     console.log(`환경법규 메일링 서비스: http://localhost:${PORT}`);
   });
+  // 로컬에서 직접 실행하고 LOCAL_AUTO_SEND=true이면 외부 스케줄러 없이 1분마다 예약 발송 시각을 확인한다.
+  if (LOCAL_AUTO_SEND) setInterval(() => {
+    runScheduledSend().then((result) => {
+      if (['sent', 'failed'].includes(result.status)) console.log('[자동 발송]', JSON.stringify(result));
+    }).catch((error) => console.error('[자동 발송 오류]', error.message));
+  }, 60 * 1000);
 }
