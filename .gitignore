@@ -13,3 +13,4 @@ output/
 .env*
 schedule.json
 schedule.json.tmp
+server.log
