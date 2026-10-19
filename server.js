@@ -316,12 +316,13 @@ async function saveRecipients(recipients) {
 }
 
 // --- 자동 발송 일정 ---
-// 서버리스 환경에는 상주 타이머가 없으므로, 외부 스케줄러(GitHub Actions 등)가 /api/cron/tick 을
+// 서버리스 환경에는 상주 타이머가 없으므로, 외부 스케줄러(Upstash QStash, 예비로 GitHub Actions)가 /api/cron/tick 을
 // 주기적으로 호출하면 "가장 최근 예정 시각이 지났고 아직 발송하지 않았는지"를 확인해 발송한다.
-// 호출이 몇 분 늦어도 SCHEDULE_GRACE_MS 안이면 발송하고, 같은 회차는 잠금 키로 한 번만 발송한다.
+// 호출이 늦어도 SCHEDULE_GRACE_MS 안이면 발송하고, 같은 회차는 잠금 키로 한 번만 발송한다.
+// GitHub Actions 예약 실행은 몇 시간씩 밀리기도 하므로, 그 주 발송이 빠지지 않도록 12시간까지 기다린다.
 const SCHEDULE_FILE = path.join(__dirname, 'schedule.json');
-const SCHEDULE_GRACE_MS = 3 * 60 * 60 * 1000;
-const SCHEDULE_MAX_ATTEMPTS = 3;
+const SCHEDULE_GRACE_MS = 12 * 60 * 60 * 1000;
+const SCHEDULE_MAX_ATTEMPTS = 6;
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 // 배포 서버와 로컬 서버가 동시에 발송하지 않도록, 로컬 자체 타이머는 LOCAL_AUTO_SEND=true일 때만 켠다.
 const LOCAL_AUTO_SEND = require.main === module && process.env.LOCAL_AUTO_SEND === 'true';
