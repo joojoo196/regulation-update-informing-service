@@ -26,6 +26,7 @@ const RECENT_PROMULGATED_LAWS_URL = 'https://www.law.go.kr/LSW/nwRvsLsPop.do?chr
 const UPCOMING_LAWS_URL = 'https://www.law.go.kr/LSW/efLsPop.do?chrIdx=7&cptOfi=1482000&sortIdx=0';
 const LEGISLATION_NOTICE_URL = 'https://mcee.go.kr/home/web/lawMaking/list.do';
 const ADMIN_NOTICE_URL = 'https://mcee.go.kr/home/web/board/list.do?boardMasterId=827&menuId=10557&maxPageItems=100&pagerOffset=0';
+const NICS_ADMIN_NOTICE_URL = 'https://nics.mcee.go.kr/sub.do?menuId=111';
 const MAIL_FROM_NAME = process.env.MAIL_FROM_NAME || '환경법령 알림서비스';
 const MAIL_USER = process.env.MAIL_USER || '';
 const MAIL_APP_PASSWORD = process.env.MAIL_APP_PASSWORD || '';
@@ -780,6 +781,77 @@ async function fetchAdministrativeNotices(from) {
   }));
 }
 
+// 화학물질안전원 행정예고 게시판. 목록에는 등록일만 있고(예고 종료일은 첨부 공고문에 있음),
+// 상세 링크는 onclick="fnView(게시판, 글번호)" 형태라 글번호로 상세 주소를 만든다.
+// 상단 고정(공지) 글과 일반 글에 같은 글이 함께 나오므로 글번호로 중복을 없앤다.
+async function fetchNicsAdministrativeNotices(from) {
+  const html = await requestHtml(NICS_ADMIN_NOTICE_URL);
+  const items = new Map();
+  for (const cells of rowsFromHtml(html)) {
+    if (cells.length < 4) continue;
+    const subject = String(cells[1] || '');
+    const view = subject.match(/fnView\(\s*(\d+)\s*,\s*(\d+)\s*\)/);
+    if (!view) continue;
+    const titleAttribute = subject.match(/\btitle="([^"]+)"/i);
+    const fullTitle = decodeHtml(titleAttribute ? titleAttribute[1] : subject).replace(/\s*첨부파일 있음\s*$/, '');
+    const noticeNumber = (fullTitle.match(/^\(([^)]*공고[^)]*)\)/) || [])[1] || '';
+    const published = dateKey(decodeHtml(cells[3]));
+    if (!published || published < from) continue;
+    items.set(view[2], {
+      id: `nics-notice-${view[2]}`,
+      group: 'administrativeNotice', category: '고시', status: '행정예고',
+      title: fullTitle.replace(/^\([^)]*공고[^)]*\)\s*/, ''),
+      agency: '화학물질안전원', changedAt: displayDate(published), announcedAt: displayDate(published), effectiveAt: '',
+      kind: '행정예고', noticeNumber,
+      url: `https://nics.mcee.go.kr/boardView.do?menuId=111&boardMasterId=${view[1]}&boardId=${view[2]}`
+    });
+  }
+  return Promise.all([...items.values()].map(async (item) => {
+    const detail = await getNicsNoticeDetail(item.url, item.title);
+    return { ...item, ...detail };
+  }));
+}
+
+// 화학물질안전원 상세 페이지는 개정이유를 첨부 PDF로만 올리는 경우가 많아,
+// 본문에 개정이유 구간이 없으면 "~공고합니다." 공고 문장을 요약으로 쓴다.
+async function getNicsNoticeDetail(url, title = '') {
+  try {
+    const html = await requestHtml(url);
+    const text = decodeHtml(String(html).replace(/<script\b[^]*?<\/script>/gi, '').replace(/<style\b[^]*?<\/style>/gi, ''));
+    const department = (text.match(/부서명\s+(\S+)/) || [])[1] || '';
+    const start = text.search(/\d\s*\.\s*(개정\s*이유|제정\s*이유|제안\s*이유|개정\s*취지)/);
+    let section = '';
+    if (start !== -1) {
+      const rest = text.slice(start);
+      const end = rest.search(/\d\s*\.\s*(의견제출|시행일|부칙|문의처|담당자)/);
+      section = (end === -1 ? rest : rest.slice(0, end)).replace(/^\d\s*\.\s*(개정|제정|제안)\s*(이유|취지)\s*/, '');
+    } else {
+      section = (text.match(/「[^.]{0,400}?공고합니다\./) || [''])[0];
+    }
+    return { department, keywords: extractReasonKeywords(section, title), summary: summarizeReasonText(section) };
+  } catch { return { department: '', keywords: [], summary: '' }; }
+}
+
+// 같은 고시를 환경부와 화학물질안전원이 각각 행정예고 게시판에 올리는 경우가 있다.
+// 공고번호는 서로 달라 비교할 수 없으므로, 제목의 「대상 고시명」(없으면 제목 전체)을 정규화해 비교한다.
+function administrativeNoticeKey(title) {
+  const text = String(title || '').replace(/^\([^)]*공고[^)]*\)\s*/, '');
+  const quoted = [...text.matchAll(/[「『]([^」』]+)[」』]/g)].map((match) => match[1]);
+  const base = quoted.length ? quoted.join('|') : text.replace(/(일부\s*)?(개정|제정|폐지)\s*(고시|예규|훈령)?\s*(\(?안\)?)?|행정\s*예고|고시안|\(고시\)/g, '');
+  return base.replace(/[^가-힣A-Za-z0-9|]/g, '');
+}
+
+function mergeAdministrativeNotices(primary, secondary) {
+  const seen = new Set(primary.map((item) => administrativeNoticeKey(item.title)).filter(Boolean));
+  return [...primary, ...secondary.filter((item) => {
+    const key = administrativeNoticeKey(item.title);
+    if (!key) return true;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  })];
+}
+
 async function requestApi(params) {
   const url = new URL(LAW_API);
   Object.entries({ OC: API_KEY, type: 'JSON', ...params }).forEach(([key, value]) => url.searchParams.set(key, value));
@@ -963,14 +1035,17 @@ async function getRecentChanges() {
   const range = `${dateKeys.at(-1)}~${dateKeys[0]}`;
   const today = dateKeys[0];
   const sourceErrors = [];
-  const [recentLaws, adminRules, mceeLaws, officialLaws, legislationResult, administrativeResult] = await Promise.all([
+  const [recentLaws, adminRules, mceeLaws, officialLaws, legislationResult, mceeAdministrativeResult, nicsAdministrativeResult] = await Promise.all([
     fetchAll({ target: 'law', org: '1482000', sort: 'ddes' }, 'law'),
     fetchAll({ target: 'admrul', mobileYn: 'Y', org: '1482000', sort: 'ddes' }, 'admrul'),
     fetchMceeRecentLawListings(dateKeys.at(-1), today).catch((error) => { sourceErrors.push(`환경부 최근 제·개정법령: ${error.message}`); return []; }),
     fetchOfficialLawListings(dateKeys.at(-1), today).catch((error) => { sourceErrors.push(`법령 보완 목록: ${error.message}`); return []; }),
     fetchLegislationNotices(dateKeys.at(-1), dateKeys[0]).catch((error) => { sourceErrors.push(`입법예고: ${error.message}`); return []; }),
-    fetchAdministrativeNotices(dateKeys.at(-1)).catch((error) => { sourceErrors.push(`행정예고: ${error.message}`); return []; })
+    fetchAdministrativeNotices(dateKeys.at(-1)).catch((error) => { sourceErrors.push(`행정예고: ${error.message}`); return []; }),
+    fetchNicsAdministrativeNotices(dateKeys.at(-1)).catch((error) => { sourceErrors.push(`화학물질안전원 행정예고: ${error.message}`); return []; })
   ]);
+  // 두 게시판에 같은 고시가 올라오면 예고 종료일까지 있는 환경부 게시글을 남긴다.
+  const administrativeResult = mergeAdministrativeNotices(mceeAdministrativeResult, nicsAdministrativeResult);
 
   const laws = await Promise.all(recentLaws.filter((item) => isRelevant(item) && isRecentPublication(item, '공포일자', dateKeys.at(-1), today)).map(async (item) => {
     const detail = await getReasonDetail('law', { MST: item['법령일련번호'] }, item['법령명한글']);
