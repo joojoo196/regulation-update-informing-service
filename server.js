@@ -760,9 +760,29 @@ async function fetchLegislationNotices(from, to) {
   }));
 }
 
+// 환경부 행정예고 게시판은 maxPageItems 값과 상관없이 한 페이지에 10건만 주므로 pagerOffset으로 넘겨 가며 읽는다.
+// 글번호순이라 예고 시작일이 완전히 정렬돼 있지 않으므로, 한 페이지 전체가 기간보다 오래됐을 때 멈춘다.
+async function fetchAdministrativeNoticeRows(from) {
+  const rows = [];
+  const pageSize = 10;
+  const maxPages = 5;
+  for (let page = 0; page < maxPages; page += 1) {
+    const url = new URL(ADMIN_NOTICE_URL);
+    url.searchParams.set('maxPageItems', String(pageSize));
+    url.searchParams.set('pagerOffset', String(page * pageSize));
+    const pageRows = rowsFromHtml(await requestHtml(url)).filter((cells) => cells.length >= 7);
+    if (!pageRows.length) break;
+    rows.push(...pageRows);
+    const newestDate = pageRows.map((cells) => dateKey(decodeHtml(cells[3]))).filter(Boolean).sort().at(-1);
+    if (!newestDate || newestDate < from) break;
+  }
+  return rows;
+}
+
 async function fetchAdministrativeNotices(from) {
-  const html = await requestHtml(ADMIN_NOTICE_URL);
-  const items = rowsFromHtml(html).filter((cells) => cells.length >= 7).map((cells) => {
+  const rows = await fetchAdministrativeNoticeRows(from);
+  const unique = new Map(rows.map((cells) => [decodeHtml(cells[0]), cells]));
+  const items = [...unique.values()].map((cells) => {
     const anchor = anchorFromCell(cells[1], ADMIN_NOTICE_URL);
     const start = dateKey(decodeHtml(cells[3]));
     const end = dateKey(decodeHtml(cells[4]));
